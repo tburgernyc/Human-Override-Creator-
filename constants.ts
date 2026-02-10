@@ -24,7 +24,7 @@ export const VOICE_PRESETS: VoicePreset[] = [
   { id: 'zephyr_std', label: 'Zephyr (Female - Calm)', gender: 'Female', apiVoiceName: 'Zephyr', defaultPitch: 0, defaultSpeed: 1 },
   { id: 'zephyr_deep', label: 'Zephyr (Female - Deep)', gender: 'Female', apiVoiceName: 'Zephyr', defaultPitch: -3, defaultSpeed: 0.9 },
   { id: 'zephyr_fast', label: 'Zephyr (Female - Energetic)', gender: 'Female', apiVoiceName: 'Zephyr', defaultPitch: 1, defaultSpeed: 1.2 },
-  
+
   // Male Voices (6)
   { id: 'fenrir_std', label: 'Fenrir (Male - Deep)', gender: 'Male', apiVoiceName: 'Fenrir', defaultPitch: 0, defaultSpeed: 1 },
   { id: 'fenrir_intense', label: 'Fenrir (Male - Intense)', gender: 'Male', apiVoiceName: 'Fenrir', defaultPitch: -2, defaultSpeed: 1.1 },
@@ -47,14 +47,14 @@ export const VISUAL_STYLES = [
   'Black and White Film'
 ];
 
-// Using GitHub pages or similar reliable CDN is safer for CORS, but keeping Pixabay with fallback logic is acceptable.
-// Ensure these are Direct Downloads.
-export const MUSIC_TRACKS = {
-  suspense: "https://cdn.pixabay.com/download/audio/2022/03/24/audio_c8c8a73467.mp3", // Dark Mystery
-  action: "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3", // Epic Cinematic
-  calm: "https://cdn.pixabay.com/download/audio/2022/02/07/audio_13b567d025.mp3", // Ambient
-  cheerful: "https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3", // Upbeat
-  melancholic: "https://cdn.pixabay.com/download/audio/2021/11/24/audio_8250811e61.mp3", // Sad Piano
+// Royalty-free music from public CDNs (no authentication required).
+// These are curated for cinematic production quality.
+export const MUSIC_TRACKS: Record<string, string> = {
+  suspense: "https://upload.wikimedia.org/wikipedia/commons/5/5a/Suspense_strings.ogg",
+  action: "https://upload.wikimedia.org/wikipedia/commons/4/4e/04_-_Vivaldi_Summer_mvt_3_Presto_-_John_Harrison_violin.ogg",
+  calm: "https://upload.wikimedia.org/wikipedia/commons/e/e3/Clair_de_Lune_-_Claude_Debussy.ogg",
+  cheerful: "https://upload.wikimedia.org/wikipedia/commons/6/6d/Grieg_Holberg_Suite_Rigaudon.ogg",
+  melancholic: "https://upload.wikimedia.org/wikipedia/commons/1/1f/Chopin_-_Nocturne_op.9_no.2.ogg",
 };
 
 export const INITIAL_SCRIPT_PLACEHOLDER = `Title: The Future of Quantum Computing

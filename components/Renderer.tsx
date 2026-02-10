@@ -4,12 +4,13 @@ import { Scene, GeneratedAssets, Resolution, AspectRatio, TextOverlay, ProjectSt
 import { decodeAudio } from '../services/gemini';
 import { MUSIC_TRACKS } from '../constants';
 
-const AMBIENT_TRACKS = {
-    rain: "https://cdn.pixabay.com/download/audio/2022/01/12/audio_659092496a.mp3",
-    city_hum: "https://cdn.pixabay.com/download/audio/2021/08/09/audio_24e39f3729.mp3",
-    wind: "https://cdn.pixabay.com/download/audio/2022/03/10/audio_f8a0026e63.mp3",
-    space_drone: "https://cdn.pixabay.com/download/audio/2022/01/18/audio_6d32159f8c.mp3",
-    data_stream: "https://cdn.pixabay.com/download/audio/2021/11/25/audio_145d045d94.mp3"
+// Free ambient SFX from Wikimedia Commons (no auth required)
+const AMBIENT_TRACKS: Record<string, string> = {
+    rain: "https://upload.wikimedia.org/wikipedia/commons/4/4e/Rain_on_a_tin_roof.ogg",
+    city_hum: "https://upload.wikimedia.org/wikipedia/commons/0/0c/GreenMarket_Cape_Town_Ambient.ogg",
+    wind: "https://upload.wikimedia.org/wikipedia/commons/a/a4/Wind_sound.ogg",
+    space_drone: "https://upload.wikimedia.org/wikipedia/commons/8/87/Drone_in_A.ogg",
+    data_stream: "https://upload.wikimedia.org/wikipedia/commons/e/ef/Teletype_Model_33.ogg"
 };
 
 interface RendererProps {
@@ -35,7 +36,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
 
     let width = resolution === Resolution.FHD ? 1920 : 1280;
     let height = resolution === Resolution.FHD ? 1080 : 720;
-    
+
     if (aspectRatio === AspectRatio.PORTRAIT) [width, height] = [height, width];
     else if (aspectRatio === AspectRatio.SQUARE) width = height = resolution === Resolution.FHD ? 1080 : 720;
 
@@ -48,7 +49,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             filters.push(`hue-rotate(${((grade.temperature || 0) / 100) * 15}deg)`);
             filters.push(`brightness(${100 + (grade.exposure || 0)}%)`);
         }
-        
+
         if (cinematicProfile === 'dreamy') filters.push('sepia(20%) brightness(110%) blur(0.5px)');
         if (cinematicProfile === 'high_contrast') filters.push('contrast(140%) saturate(130%)');
         if (cinematicProfile === 'vintage') filters.push('sepia(35%) contrast(90%) brightness(95%)');
@@ -84,9 +85,9 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             displayText = text.substring(0, charCount);
         } else if (animation === 'zoom_in') {
             const scale = 0.7 + Math.min(p * 4, 1) * 0.3;
-            ctx.translate(w/2, y);
+            ctx.translate(w / 2, y);
             ctx.scale(scale, scale);
-            ctx.translate(-w/2, -y);
+            ctx.translate(-w / 2, -y);
             opacity = Math.min(p * 4, 1);
         } else if (animation === 'fade') {
             opacity = Math.min(p * 4, 1);
@@ -130,19 +131,19 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         if (grain > 0 && Math.random() > 0.5) {
             ctx.save();
             ctx.globalAlpha = grain / 200;
-            ctx.fillStyle = `rgba(${Math.random()*255},${Math.random()*255},${Math.random()*255},0.15)`;
-            for(let i=0; i<5; i++) {
-                ctx.fillRect(Math.random()*w, Math.random()*h, 2, 2);
+            ctx.fillStyle = `rgba(${Math.random() * 255},${Math.random() * 255},${Math.random() * 255},0.15)`;
+            for (let i = 0; i < 5; i++) {
+                ctx.fillRect(Math.random() * w, Math.random() * h, 2, 2);
             }
             ctx.restore();
         }
     };
 
     const drawMediaFrame = (
-        ctx: CanvasRenderingContext2D, 
-        media: HTMLVideoElement | HTMLImageElement, 
-        w: number, h: number, 
-        p: number, 
+        ctx: CanvasRenderingContext2D,
+        media: HTMLVideoElement | HTMLImageElement,
+        w: number, h: number,
+        p: number,
         scene: Scene,
         prevMedia?: HTMLVideoElement | HTMLImageElement | null
     ) => {
@@ -174,7 +175,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             const mediaH = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight;
             let scale = Math.max(w / mediaW, h / mediaH);
             const motion = scene.cameraMotion || 'random_cinematic';
-            
+
             if (motion === 'zoom_in') scale *= (1 + p * 0.18);
             else if (motion === 'zoom_out') scale *= (1.18 - p * 0.18);
             else if (motion === 'pan_left') ctx.translate(-p * 150, 0);
@@ -194,14 +195,14 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
 
         const startRendering = async () => {
             if (!canvasRef.current) return;
-            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 48000});
+            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d', { alpha: false })!;
             const stream = canvas.captureStream(30);
             const destNode = audioCtx.createMediaStreamDestination();
             const tracks = [...stream.getVideoTracks(), ...destNode.stream.getAudioTracks()];
             const combinedStream = new MediaStream(tracks);
-            
+
             const recorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 25000000 });
             recorder.ondataavailable = e => chunks.push(e.data);
             recorder.onstop = () => {
@@ -278,34 +279,34 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     return (
         <div className="fixed inset-0 bg-eclipse-black/98 flex flex-col items-center justify-center z-[500] backdrop-blur-3xl p-6">
             {renderState === 'complete' ? (
-              <div className="w-full max-w-2xl text-center p-12 glass-panel rounded-[3rem] border-white/10 animate-in zoom-in-95 duration-700">
-                <div className="w-20 h-20 bg-deep-sage/10 rounded-full flex items-center justify-center mx-auto mb-10 text-deep-sage text-4xl shadow-lg border border-deep-sage/20">
-                    <i className="fa-solid fa-check"></i>
-                </div>
-                <h2 className="text-4xl font-bold text-white mb-4 uppercase font-mono italic">Compile Sequence Finalized</h2>
-                <p className="text-mystic-gray mb-12 text-sm uppercase tracking-widest font-bold">Neural tracks merged. Video unit ready for distribution.</p>
-                <div className="flex flex-col gap-4">
-                  <a href={finalUrl!} download="master_production_unit.webm" className="bg-gold-gradient text-white py-6 rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-xl hover:scale-[1.02] transition-all text-center">Download Master Unit</a>
-                  <button onClick={onCancel} className="text-mystic-gray hover:text-white uppercase tracking-widest text-[9px] font-black py-4">Close Synthesis Lab</button>
-                </div>
-              </div>
-            ) : (
-              <div className="w-full max-w-3xl text-center p-16 glass-panel rounded-[4rem] border-white/5 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-1 bg-white/5">
-                    <div className="h-full bg-luna-gold transition-all duration-300" style={{ width: `${progress}%` }}></div>
-                </div>
-                <div className="relative mb-12">
-                   <div className="w-40 h-40 border-4 border-luna-gold/10 border-t-luna-gold rounded-full animate-spin mx-auto"></div>
-                   <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-black text-luna-gold">{Math.floor(progress)}%</div>
-                </div>
-                <h2 className="text-5xl font-black text-white mb-6 font-mono uppercase tracking-tighter italic">{statusMessage}</h2>
-                <div className="flex justify-center gap-10">
-                    <div className="flex flex-col">
-                        <span className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.4em] mb-1">Pass Index</span>
-                        <span className="text-xs font-bold text-starlight">{cinematicProfile.toUpperCase()}</span>
+                <div className="w-full max-w-2xl text-center p-12 glass-panel rounded-[3rem] border-white/10 animate-in zoom-in-95 duration-700">
+                    <div className="w-20 h-20 bg-deep-sage/10 rounded-full flex items-center justify-center mx-auto mb-10 text-deep-sage text-4xl shadow-lg border border-deep-sage/20">
+                        <i className="fa-solid fa-check"></i>
+                    </div>
+                    <h2 className="text-4xl font-bold text-white mb-4 uppercase font-mono italic">Compile Sequence Finalized</h2>
+                    <p className="text-mystic-gray mb-12 text-sm uppercase tracking-widest font-bold">Neural tracks merged. Video unit ready for distribution.</p>
+                    <div className="flex flex-col gap-4">
+                        <a href={finalUrl!} download="master_production_unit.webm" className="bg-gold-gradient text-white py-6 rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-xl hover:scale-[1.02] transition-all text-center">Download Master Unit</a>
+                        <button onClick={onCancel} className="text-mystic-gray hover:text-white uppercase tracking-widest text-[9px] font-black py-4">Close Synthesis Lab</button>
                     </div>
                 </div>
-              </div>
+            ) : (
+                <div className="w-full max-w-3xl text-center p-16 glass-panel rounded-[4rem] border-white/5 relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-white/5">
+                        <div className="h-full bg-luna-gold transition-all duration-300" style={{ width: `${progress}%` }}></div>
+                    </div>
+                    <div className="relative mb-12">
+                        <div className="w-40 h-40 border-4 border-luna-gold/10 border-t-luna-gold rounded-full animate-spin mx-auto"></div>
+                        <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-black text-luna-gold">{Math.floor(progress)}%</div>
+                    </div>
+                    <h2 className="text-5xl font-black text-white mb-6 font-mono uppercase tracking-tighter italic">{statusMessage}</h2>
+                    <div className="flex justify-center gap-10">
+                        <div className="flex flex-col">
+                            <span className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.4em] mb-1">Pass Index</span>
+                            <span className="text-xs font-bold text-starlight">{(cinematicProfile || 'natural').toUpperCase()}</span>
+                        </div>
+                    </div>
+                </div>
             )}
             <canvas ref={canvasRef} width={width} height={height} className="hidden" />
         </div>

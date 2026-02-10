@@ -13,10 +13,10 @@ interface DirectorAssistantProps {
 }
 
 const QUICK_COMMANDS = [
-    { label: "Synthesize B-Roll", prompt: "Analyze my script and suggest 3 B-Roll scenes to add variety." },
-    { label: "Audit Script", prompt: "Review my current script for pacing and narrative flow. Give me a quick diagnosis." },
-    { label: "Enhance Visuals", prompt: "Give me more cinematic visual prompt ideas for my scenes based on the current style." },
-    { label: "Sync Cast", prompt: "Check if my character descriptions are consistent across all scene prompts." }
+  { label: "Synthesize B-Roll", prompt: "Analyze my script and suggest 3 B-Roll scenes to add variety." },
+  { label: "Audit Script", prompt: "Review my current script for pacing and narrative flow. Give me a quick diagnosis." },
+  { label: "Enhance Visuals", prompt: "Give me more cinematic visual prompt ideas for my scenes based on the current style." },
+  { label: "Sync Cast", prompt: "Check if my character descriptions are consistent across all scene prompts." }
 ];
 
 const DIRECTORIAL_TOOLS: FunctionDeclaration[] = [
@@ -63,11 +63,11 @@ async function decodeAudioData(
   return buffer;
 }
 
-export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({ 
-  project, 
-  onUpdateProject, 
+export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
+  project,
+  onUpdateProject,
   onExecuteTool,
-  autoTriggerDiagnosis 
+  autoTriggerDiagnosis
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', content: "OverrideBot operational. Sequence diagnosis clear. Ready for directorial commands." }
@@ -76,17 +76,19 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
   const [isThinking, setIsThinking] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const [micStream, setMicStream] = useState<MediaStream | null>(null);
-  
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sessionRef = useRef<any>(null);
+  const diagnosisRanRef = useRef(false);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
   useEffect(() => {
-    if (autoTriggerDiagnosis) {
+    if (autoTriggerDiagnosis && !diagnosisRanRef.current) {
+      diagnosisRanRef.current = true;
       handleSubmit(undefined, "Perform an initial sequence diagnosis of the newly analyzed script. Structure it as per the OverrideBot protocol.");
     }
   }, [autoTriggerDiagnosis]);
@@ -104,7 +106,7 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
     try {
       const history = messages.map(m => ({ role: m.role as any, content: m.content }));
       const response = await handleDirectorChat(messageToSend, project, history);
-      
+
       if (response.functionCalls) {
         for (const fc of response.functionCalls) {
           const result = await onExecuteTool(fc.name, fc.args);
@@ -142,7 +144,7 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setMicStream(stream);
       setIsLive(true);
-      
+
       setMessages(prev => [...prev, { role: 'system', content: "Initializing Live Multi-Modal Directorial Interface..." }]);
 
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -150,36 +152,54 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
       const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       const outputNode = outputAudioContext.createGain();
       outputNode.connect(outputAudioContext.destination);
-      
+
       let nextStartTime = 0;
       const sources = new Set<AudioBufferSourceNode>();
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
-          onopen: () => {
-            const source = inputAudioContext.createMediaStreamSource(stream);
-            const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
-            scriptProcessor.onaudioprocess = (e) => {
-              const inputData = e.inputBuffer.getChannelData(0);
-              const int16 = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) {
-                int16[i] = inputData[i] * 32768;
-              }
-              const base64 = encode(new Uint8Array(int16.buffer));
-              sessionPromise.then(s => s.sendRealtimeInput({ 
-                media: { data: base64, mimeType: 'audio/pcm;rate=16000' } 
-              }));
-            };
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(inputAudioContext.destination);
+          onopen: async () => {
+            // H5: AudioWorklet replaces deprecated ScriptProcessorNode
+            try {
+              await inputAudioContext.audioWorklet.addModule('/mic-processor.js');
+              const source = inputAudioContext.createMediaStreamSource(stream);
+              const workletNode = new AudioWorkletNode(inputAudioContext, 'mic-processor');
+              workletNode.port.onmessage = (e) => {
+                const base64 = encode(new Uint8Array(e.data));
+                sessionPromise.then(s => s.sendRealtimeInput({
+                  media: { data: base64, mimeType: 'audio/pcm;rate=16000' }
+                }));
+              };
+              source.connect(workletNode);
+              workletNode.connect(inputAudioContext.destination);
+            } catch (workletErr) {
+              console.error('AudioWorklet failed, falling back to ScriptProcessor:', workletErr);
+              // Fallback for browsers that don't support AudioWorklet
+              const source = inputAudioContext.createMediaStreamSource(stream);
+              const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
+              scriptProcessor.onaudioprocess = (e) => {
+                const inputData = e.inputBuffer.getChannelData(0);
+                const int16 = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                  int16[i] = inputData[i] * 32768;
+                }
+                const base64 = encode(new Uint8Array(int16.buffer));
+                sessionPromise.then(s => s.sendRealtimeInput({
+                  media: { data: base64, mimeType: 'audio/pcm;rate=16000' }
+                }));
+              };
+              source.connect(scriptProcessor);
+              scriptProcessor.connect(inputAudioContext.destination);
+            }
           },
           onmessage: async (msg: LiveServerMessage) => {
             if (msg.toolCall) {
               for (const fc of msg.toolCall.functionCalls) {
                 const result = await onExecuteTool(fc.name, fc.args);
+                // H4: functionResponses must be an array
                 sessionPromise.then(s => s.sendToolResponse({
-                  functionResponses: { id: fc.id, name: fc.name, response: { result } }
+                  functionResponses: [{ id: fc.id, name: fc.name, response: { result } }]
                 }));
               }
             }
@@ -231,25 +251,25 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
             {isLive && <LiveWaveform stream={micStream} isActive={isLive} color="#ef4444" />}
           </div>
         </div>
-        <button 
-            onClick={toggleLiveMode}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-widest border transition-all ${isLive ? 'bg-solar-amber/20 border-solar-amber text-solar-amber shadow-lg shadow-solar-amber/10' : 'nm-button border-white/10 text-mystic-gray hover:text-white'}`}
+        <button
+          onClick={toggleLiveMode}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-widest border transition-all ${isLive ? 'bg-solar-amber/20 border-solar-amber text-solar-amber shadow-lg shadow-solar-amber/10' : 'nm-button border-white/10 text-mystic-gray hover:text-white'}`}
         >
-            {isLive ? <><i className="fa-solid fa-microphone-slash mr-1"></i> End Session</> : <><i className="fa-solid fa-microphone mr-1"></i> Start Live</>}
+          {isLive ? <><i className="fa-solid fa-microphone-slash mr-1"></i> End Session</> : <><i className="fa-solid fa-microphone mr-1"></i> Start Live</>}
         </button>
       </div>
 
       <div className="px-6 py-4 bg-black/10 border-b border-white/5 overflow-x-auto scrollbar-hide flex gap-3">
-          {QUICK_COMMANDS.map((cmd) => (
-              <button 
-                  key={cmd.label}
-                  onClick={() => handleSubmit(undefined, cmd.prompt)}
-                  disabled={isThinking || isLive}
-                  className="flex-shrink-0 px-4 py-2 nm-button rounded-full text-[8px] font-bold text-celestial-stone hover:text-luna-gold transition-all uppercase tracking-widest border border-white/5 disabled:opacity-30"
-              >
-                  {cmd.label}
-              </button>
-          ))}
+        {QUICK_COMMANDS.map((cmd) => (
+          <button
+            key={cmd.label}
+            onClick={() => handleSubmit(undefined, cmd.prompt)}
+            disabled={isThinking || isLive}
+            className="flex-shrink-0 px-4 py-2 nm-button rounded-full text-[8px] font-bold text-celestial-stone hover:text-luna-gold transition-all uppercase tracking-widest border border-white/5 disabled:opacity-30"
+          >
+            {cmd.label}
+          </button>
+        ))}
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-hide bg-black/20">
@@ -257,10 +277,10 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
           <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
             <div className={`
               max-w-[90%] p-5 rounded-2xl text-[11px] leading-relaxed shadow-sm
-              ${m.role === 'user' 
-                ? 'nm-button-gold text-white rounded-tr-none' 
-                : m.role === 'system' 
-                  ? 'nm-inset-input text-solar-amber border border-solar-amber/10 italic font-mono opacity-80' 
+              ${m.role === 'user'
+                ? 'nm-button-gold text-white rounded-tr-none'
+                : m.role === 'system'
+                  ? 'nm-inset-input text-solar-amber border border-solar-amber/10 italic font-mono opacity-80'
                   : 'nm-button text-starlight border border-white/5 rounded-tl-none'
               }
             `}>
@@ -273,27 +293,27 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
         ))}
         {isThinking && (
           <div className="flex flex-col items-start animate-pulse">
-             <div className="nm-button p-5 rounded-2xl rounded-tl-none border border-white/5 flex gap-2 items-center">
-                <div className="w-1.5 h-1.5 bg-luna-gold rounded-full animate-bounce"></div>
-                <div className="w-1.5 h-1.5 bg-luna-gold rounded-full animate-bounce [animation-delay:-0.1s]"></div>
-                <div className="w-1.5 h-1.5 bg-luna-gold rounded-full animate-bounce [animation-delay:-0.2s]"></div>
-             </div>
+            <div className="nm-button p-5 rounded-2xl rounded-tl-none border border-white/5 flex gap-2 items-center">
+              <div className="w-1.5 h-1.5 bg-luna-gold rounded-full animate-bounce"></div>
+              <div className="w-1.5 h-1.5 bg-luna-gold rounded-full animate-bounce [animation-delay:-0.1s]"></div>
+              <div className="w-1.5 h-1.5 bg-luna-gold rounded-full animate-bounce [animation-delay:-0.2s]"></div>
+            </div>
           </div>
         )}
       </div>
 
       <form onSubmit={(e) => handleSubmit(e)} className="p-6 nm-button rounded-b-[2rem] border-t border-white/5">
         <div className="relative group">
-          <input 
+          <input
             ref={inputRef}
-            type="text" 
+            type="text"
             value={input}
             onChange={e => setInput(e.target.value)}
             disabled={isLive}
             placeholder={isLive ? "Director is listening..." : "Issue production command..."}
             className="w-full nm-inset-input border-none rounded-xl py-4 pl-5 pr-14 text-xs text-starlight placeholder-mystic-gray/30 focus:outline-none focus:ring-1 focus:ring-luna-gold/20 transition-all font-mono disabled:opacity-50"
           />
-          <button 
+          <button
             type="submit"
             disabled={isThinking || !input.trim() || isLive}
             className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-lg nm-button-gold text-white flex items-center justify-center transition-all disabled:opacity-0 active:scale-95 shadow-lg"

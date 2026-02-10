@@ -31,17 +31,17 @@ export type TransitionType = 'cut' | 'fade' | 'crossfade' | 'zoom_in' | 'zoom_ou
 export type CameraMotion = 'static' | 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right' | 'dolly_in' | 'dolly_out' | 'random_cinematic';
 
 export interface ColorGrade {
-  contrast: number; 
-  saturation: number; 
-  brightness: number; 
-  temperature: number; 
-  tint: number; 
-  exposure: number; 
-  vibrance: number; 
+  contrast: number;
+  saturation: number;
+  brightness: number;
+  temperature: number;
+  tint: number;
+  exposure: number;
+  vibrance: number;
 }
 
 export interface Scene {
-  id: number;
+  id: string;
   description: string;
   visualPrompt: string;
   cameraAngle?: string;
@@ -55,7 +55,7 @@ export interface Scene {
   sfxVolume?: number; // 0-100
   textOverlay?: TextOverlay;
   transition?: TransitionType;
-  transitionDuration?: number; 
+  transitionDuration?: number;
   colorGrading?: ColorGrade;
   styleOverride?: string;
   productionNotes?: string;
@@ -127,7 +127,7 @@ export interface ViralPotential {
   hookScore: number;
   retentionCatalysts: string[];
   engagementFriction: string[];
-  heatmap: number[]; 
+  heatmap: number[];
   predictionSummary: string;
 }
 
@@ -149,14 +149,14 @@ export interface ProjectState {
   activeDraft?: DirectorDraft | null;
   cinematicProfile?: 'natural' | 'dreamy' | 'high_contrast' | 'vintage' | 'noir';
   mastering?: {
-    musicVolume: number; 
-    voiceVolume: number; 
-    ambientVolume: number; 
-    filmGrain: number;   
-    bloomIntensity: number; 
-    vignetteIntensity: number; 
-    lightLeakIntensity: number; 
-    filmBurnIntensity: number; 
+    musicVolume: number;
+    voiceVolume: number;
+    ambientVolume: number;
+    filmGrain: number;
+    bloomIntensity: number;
+    vignetteIntensity: number;
+    lightLeakIntensity: number;
+    filmBurnIntensity: number;
     lutPreset?: 'none' | 'kodak_5219' | 'fuji_400h' | 'noir' | 'technicolor';
   };
 }
@@ -176,8 +176,8 @@ export enum Resolution {
 
 declare global {
   interface AIStudio {
-      hasSelectedApiKey: () => Promise<boolean>;
-      openSelectKey: () => Promise<void>;
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
   }
   interface Window {
     aistudio?: AIStudio;
