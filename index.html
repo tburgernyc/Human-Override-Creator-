@@ -1,0 +1,126 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Human Override Creation Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+    
+    <!-- Google Fonts: Inter, JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              'eclipse-black': '#0e0e11', 
+              'eclipse-light': '#15151a', 
+              'luna-gold': '#3b82f6', 
+              'luna-gold-dim': '#1d4ed8', 
+              'mystic-gray': '#71717a', 
+              'celestial-stone': '#a1a1aa', 
+              'ethereal-smoke': '#27272a', 
+              'solar-amber': '#ef4444', 
+              'starlight': '#fafafa', 
+              'desert-sand': '#e4e4e7', 
+              'ancient-bronze': '#1e3a8a', 
+              'deep-sage': '#10b981', 
+            },
+            boxShadow: {
+              'nm-flat': '6px 6px 12px #070709, -6px -6px 12px #151519',
+              'nm-flat-sm': '3px 3px 6px #070709, -3px -3px 6px #151519',
+              'nm-inset': 'inset 4px 4px 8px #070709, inset -4px -4px 8px #151519',
+              'nm-convex': '6px 6px 12px #070709, -6px -6px 12px #151519',
+              'nm-concave': 'inset 6px 6px 12px #070709, inset -6px -6px 12px #151519',
+              'nm-gold': '4px 4px 8px #1d4ed8, -4px -4px 8px #60a5fa',
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'monospace'],
+            },
+            backgroundImage: {
+              'mystic-gradient': 'linear-gradient(to right, #0e0e11, #15151a)',
+              'gold-gradient': 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #0e0e11;
+        color: #fafafa;
+      }
+      
+      .nm-panel {
+        background: #0e0e11;
+        box-shadow: 8px 8px 16px #070709, -8px -8px 16px #151519;
+        border-radius: 2rem;
+      }
+      
+      .nm-card {
+        background: #0e0e11;
+        box-shadow: 6px 6px 12px #070709, -6px -6px 12px #151519;
+        border-radius: 1.5rem;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      
+      .nm-card:hover {
+        box-shadow: 10px 10px 20px #050507, -10px -10px 20px #1a1a20;
+        transform: translateY(-2px);
+      }
+
+      .nm-button {
+        background: #0e0e11;
+        box-shadow: 4px 4px 8px #070709, -4px -4px 8px #151519;
+        transition: all 0.2s ease;
+      }
+      
+      .nm-button:active {
+        box-shadow: inset 2px 2px 5px #070709, inset -2px -2px 5px #151519;
+        transform: scale(0.98);
+      }
+
+      .nm-button-gold {
+        background: #3b82f6;
+        box-shadow: 4px 4px 8px #1d4ed8, -4px -4px 8px #60a5fa;
+      }
+      
+      .nm-button-gold:active {
+        box-shadow: inset 2px 2px 5px #1d4ed8, inset -2px -2px 5px #60a5fa;
+      }
+
+      .nm-inset-input {
+        background: #0e0e11;
+        box-shadow: inset 4px 4px 8px #070709, inset -4px -4px 8px #151519;
+      }
+
+      /* Custom scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0e0e11; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #151519; 
+        border-radius: 4px;
+        box-shadow: inset 1px 1px 2px #070709, inset -1px -1px 2px #1c1c22;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #3b82f6; 
+      }
+    </style>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
