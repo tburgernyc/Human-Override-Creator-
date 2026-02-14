@@ -10,14 +10,40 @@ const PROXY_URL = 'http://localhost:3001';
 
 const cleanJsonResponse = (text: string): string => {
   let clean = text.trim();
+
   // Remove markdown code blocks
   clean = clean.replace(/```json\s*/g, '').replace(/```/g, '');
-  // Find the first '{' and last '}' to handle any prefix/suffix text
+
+  // Remove any leading/trailing text outside JSON structure
   const firstOpen = clean.indexOf('{');
   const lastClose = clean.lastIndexOf('}');
   if (firstOpen !== -1 && lastClose !== -1) {
     clean = clean.substring(firstOpen, lastClose + 1);
   }
+
+  // Fix common JSON issues that break standard JSON.parse:
+
+  // 1. Remove trailing commas before closing brackets/braces
+  clean = clean.replace(/,(\s*[}\]])/g, '$1');
+
+  // 2. Remove comments (// and /* */)
+  clean = clean.replace(/\/\/.*$/gm, '');
+  clean = clean.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  // 3. Fix unescaped quotes in strings (attempt to detect and escape)
+  // This is a heuristic and may not catch all cases
+  clean = clean.replace(/"([^"]*)"(\s*:\s*)"([^"]*)"/g, (match, key, colon, value) => {
+    // Escape any unescaped quotes in the value
+    const escapedValue = value.replace(/\\"/g, '"').replace(/"/g, '\\"');
+    return `"${key}"${colon}"${escapedValue}"`;
+  });
+
+  // 4. Normalize whitespace
+  clean = clean.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // 5. Remove any null bytes
+  clean = clean.replace(/\0/g, '');
+
   return clean;
 };
 
@@ -510,22 +536,82 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
 
   const response = await retryWithBackoff<GenerateContentResponse>(() => withTimeout(ai.models.generateContent({
     model: 'gemini-2.0-flash',
-    contents: `Analyze script and extract production manifest: ${script}\n\nFor each character, suggest a voice from these options based on gender and personality: ${voiceOptions}`,
-    config: { responseMimeType: "application/json", responseSchema: analysisSchema, seed, maxOutputTokens: 8192 }
+    contents: `Analyze script and extract production manifest. Generate COMPLETE and VALID JSON only - no trailing commas, no comments, proper closing brackets.\n\nScript: ${script}\n\nFor each character, suggest a voice from these options based on gender and personality: ${voiceOptions}\n\nIMPORTANT: Ensure all arrays and objects are properly closed. Do not truncate the response.`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: analysisSchema,
+      seed,
+      maxOutputTokens: 16384, // Increased from 8192 to handle longer scripts
+      temperature: 0.1 // Lower temperature for more consistent JSON structure
+    }
   }), 120000, 'Script analysis'));
 
   const rawText = response.text || "{}";
+
+  // Check if response was truncated (missing closing brace or incomplete structure)
+  const openBraces = (rawText.match(/{/g) || []).length;
+  const closeBraces = (rawText.match(/}/g) || []).length;
+  const openBrackets = (rawText.match(/\[/g) || []).length;
+  const closeBrackets = (rawText.match(/\]/g) || []).length;
+
+  if (openBraces !== closeBraces || openBrackets !== closeBrackets) {
+    console.warn(`[analyzeScript] Potentially truncated response detected. Braces: ${openBraces} open, ${closeBraces} close. Brackets: ${openBrackets} open, ${closeBrackets} close.`);
+    console.warn(`[analyzeScript] Response length: ${rawText.length} chars. Consider simplifying the script or breaking it into smaller sections.`);
+  }
+
   let data;
+
+  // Clean the response first
+  const cleaned = cleanJsonResponse(rawText);
+
   try {
-    data = JSON.parse(cleanJsonResponse(rawText));
-  } catch (e) {
+    // Try JSON5 first since it's more permissive (handles trailing commas, comments, etc.)
+    data = JSON5.parse(cleaned);
+    console.log("[analyzeScript] Successfully parsed with JSON5");
+  } catch (e1) {
     try {
-      // Fallback to JSON5 which is more permissive (allows trailing commas, unquoted keys, etc.)
-      data = JSON5.parse(cleanJsonResponse(rawText));
+      // Fallback to standard JSON.parse
+      data = JSON.parse(cleaned);
+      console.log("[analyzeScript] Successfully parsed with JSON.parse");
     } catch (e2) {
-      console.error("[analyzeScript] JSON Parse Error. Raw output:", rawText);
-      throw new Error(`Failed to parse AI response. Raw output logged. Error: ${(e as Error).message}`);
+      // Both parsers failed - provide detailed error information
+      const error1 = (e1 as Error).message;
+      const error2 = (e2 as Error).message;
+
+      console.error("[analyzeScript] JSON5 Parse Error:", error1);
+      console.error("[analyzeScript] JSON Parse Error:", error2);
+      console.error("[analyzeScript] Raw response length:", rawText.length);
+      console.error("[analyzeScript] Cleaned response length:", cleaned.length);
+      console.error("[analyzeScript] First 500 chars of cleaned:", cleaned.substring(0, 500));
+      console.error("[analyzeScript] Last 500 chars of cleaned:", cleaned.substring(Math.max(0, cleaned.length - 500)));
+
+      // Try to identify the problematic position
+      const match = error2.match(/position (\d+)/);
+      if (match) {
+        const pos = parseInt(match[1]);
+        const context = cleaned.substring(Math.max(0, pos - 100), Math.min(cleaned.length, pos + 100));
+        console.error(`[analyzeScript] Context around error position ${pos}:`, context);
+      }
+
+      throw new Error(`Failed to parse AI response after cleaning. JSON5 error: ${error1}. Standard JSON error: ${error2}. Response length: ${rawText.length} chars. Check console for full output.`);
     }
+  }
+
+  // Validate the parsed data has required structure
+  if (!data || typeof data !== 'object') {
+    throw new Error('Parsed data is not an object');
+  }
+  if (!Array.isArray(data.characters)) {
+    throw new Error('Missing or invalid characters array');
+  }
+  if (!Array.isArray(data.scenes)) {
+    throw new Error('Missing or invalid scenes array');
+  }
+  if (!data.modules || typeof data.modules !== 'object') {
+    throw new Error('Missing or invalid modules object');
+  }
+  if (!data.metadata || typeof data.metadata !== 'object') {
+    throw new Error('Missing or invalid metadata object');
   }
   return {
     characters: data.characters.map((c: any, i: number) => {
