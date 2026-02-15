@@ -23,26 +23,57 @@ const cleanJsonResponse = (text: string): string => {
 
   // Fix common JSON issues that break standard JSON.parse:
 
-  // 1. Remove trailing commas before closing brackets/braces
-  clean = clean.replace(/,(\s*[}\]])/g, '$1');
+  // 1. Remove trailing commas before closing brackets/braces (aggressive multi-pass)
+  let prevLength = 0;
+  while (prevLength !== clean.length) {
+    prevLength = clean.length;
+    clean = clean.replace(/,(\s*[}\]])/g, '$1');
+  }
 
   // 2. Remove comments (// and /* */)
   clean = clean.replace(/\/\/.*$/gm, '');
   clean = clean.replace(/\/\*[\s\S]*?\*\//g, '');
 
-  // 3. Fix unescaped quotes in strings (attempt to detect and escape)
-  // This is a heuristic and may not catch all cases
-  clean = clean.replace(/"([^"]*)"(\s*:\s*)"([^"]*)"/g, (match, key, colon, value) => {
-    // Escape any unescaped quotes in the value
-    const escapedValue = value.replace(/\\"/g, '"').replace(/"/g, '\\"');
-    return `"${key}"${colon}"${escapedValue}"`;
-  });
+  // 3. Fix truncated strings (unclosed quotes at end)
+  if ((clean.match(/"/g) || []).length % 2 !== 0) {
+    // Odd number of quotes - likely truncated
+    clean = clean + '"';
+  }
 
-  // 4. Normalize whitespace
+  // 4. Auto-complete truncated JSON structures
+  const openBraces = (clean.match(/{/g) || []).length;
+  const closeBraces = (clean.match(/}/g) || []).length;
+  const openBrackets = (clean.match(/\[/g) || []).length;
+  const closeBrackets = (clean.match(/\]/g) || []).length;
+
+  // Add missing closing brackets
+  for (let i = 0; i < (openBrackets - closeBrackets); i++) {
+    clean = clean + ']';
+  }
+
+  // Add missing closing braces
+  for (let i = 0; i < (openBraces - closeBraces); i++) {
+    clean = clean + '}';
+  }
+
+  // 5. Remove incomplete last object/array element if truncated
+  // This handles cases where the response was cut off mid-element
+  // Remove any trailing incomplete object (starts with { but no closing })
+  clean = clean.replace(/,\s*\{\s*"[^"]*"\s*:\s*[^}]*$/g, '');
+  // Remove any trailing incomplete array element
+  clean = clean.replace(/,\s*\[\s*[^\]]*$/g, '');
+
+  // 6. Remove trailing comma at the end
+  clean = clean.replace(/,(\s*)([}\]])([}\]]*)$/g, '$1$2$3');
+
+  // 7. Normalize whitespace
   clean = clean.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // 5. Remove any null bytes
+  // 8. Remove any null bytes
   clean = clean.replace(/\0/g, '');
+
+  // 9. Final pass: ensure no trailing commas anywhere
+  clean = clean.replace(/,(\s*[}\]])/g, '$1');
 
   return clean;
 };
@@ -544,7 +575,7 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
       responseMimeType: "application/json",
       responseSchema: analysisSchema,
       seed,
-      maxOutputTokens: 16384, // Increased from 8192 to handle longer scripts
+      maxOutputTokens: 32768, // Maximum allowed - handles very long scripts
       temperature: 0.1 // Lower temperature for more consistent JSON structure
     }
   }), 120000, 'Script analysis'));
