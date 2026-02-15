@@ -48,8 +48,11 @@ const cleanJsonResponse = (text: string): string => {
 };
 
 const getAIClient = async (): Promise<GoogleGenAI> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found.");
+  // Support both API_KEY (for backwards compatibility) and GEMINI_API_KEY (standard)
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key not found. Please set GEMINI_API_KEY in your .env file.");
+  }
   return new GoogleGenAI({ apiKey });
 };
 
