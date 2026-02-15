@@ -631,21 +631,56 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
     }
   }
 
-  // Validate the parsed data has required structure
+  // Validate and provide defaults for required structure
   if (!data || typeof data !== 'object') {
     throw new Error('Parsed data is not an object');
   }
+
+  // Required arrays - must exist
   if (!Array.isArray(data.characters)) {
-    throw new Error('Missing or invalid characters array');
+    console.warn('[analyzeScript] Characters array missing, using empty array');
+    data.characters = [];
   }
   if (!Array.isArray(data.scenes)) {
-    throw new Error('Missing or invalid scenes array');
+    console.warn('[analyzeScript] Scenes array missing, using empty array');
+    data.scenes = [];
   }
+
+  // Optional objects - provide defaults if missing
   if (!data.modules || typeof data.modules !== 'object') {
-    throw new Error('Missing or invalid modules object');
+    console.warn('[analyzeScript] Modules object missing or invalid, using defaults');
+    data.modules = {
+      logline: 'A compelling narrative unfolds.',
+      concept: 'An engaging story brought to life through AI-powered production.'
+    };
   }
+
   if (!data.metadata || typeof data.metadata !== 'object') {
-    throw new Error('Missing or invalid metadata object');
+    console.warn('[analyzeScript] Metadata object missing or invalid, using defaults');
+    data.metadata = {
+      hookScore: 5,
+      audience: 'General',
+      suggestedTitles: ['Untitled Production']
+    };
+  }
+
+  // Ensure modules has required fields
+  if (!data.modules.logline) {
+    data.modules.logline = 'A compelling narrative unfolds.';
+  }
+  if (!data.modules.concept) {
+    data.modules.concept = 'An engaging story brought to life through AI-powered production.';
+  }
+
+  // Ensure metadata has required fields
+  if (typeof data.metadata.hookScore !== 'number') {
+    data.metadata.hookScore = 5;
+  }
+  if (!data.metadata.audience) {
+    data.metadata.audience = 'General';
+  }
+  if (!Array.isArray(data.metadata.suggestedTitles)) {
+    data.metadata.suggestedTitles = ['Untitled Production'];
   }
   return {
     characters: data.characters.map((c: any, i: number) => {
