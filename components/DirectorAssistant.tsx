@@ -1,11 +1,12 @@
 
-import React, { useState, useRef, useEffect } from 'react';
-import { ProjectState, ChatMessage } from '../types';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { ProjectState, ChatMessage, ProductionPhase } from '../types';
 import { handleDirectorChat, getDirectorGuidance, DirectorGuidance, triggerApiKeySelection } from '../services/gemini';
 import { GoogleGenAI, Modality, LiveServerMessage, Type, FunctionDeclaration } from '@google/genai';
 import { LiveWaveform } from './LiveWaveform';
-
-type ProductionPhase = 'genesis' | 'manifest' | 'synthesis' | 'post';
+import { WorkflowProgress } from './WorkflowComponents';
+import { getPhaseChecklist } from '../services/workflowOrchestrator';
+import { getTopRecommendations } from '../services/toolRecommendationEngine';
 
 interface DirectorAssistantProps {
   project: ProjectState;
@@ -14,6 +15,9 @@ interface DirectorAssistantProps {
   autoTriggerDiagnosis?: boolean;
   currentPhase: ProductionPhase;
   onNavigatePhase?: (section: string) => void;
+  onExecuteWorkflowStep?: (stepId: string) => Promise<void>;
+  onSkipWorkflowStep?: (stepId: string) => void;
+  onOpenTool?: (toolId: string) => void;
 }
 
 const PHASE_META: Record<ProductionPhase, { label: string; icon: string; color: string; next?: ProductionPhase; nextLabel?: string }> = {
@@ -100,7 +104,10 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
   onExecuteTool,
   autoTriggerDiagnosis,
   currentPhase,
-  onNavigatePhase
+  onNavigatePhase,
+  onExecuteWorkflowStep,
+  onSkipWorkflowStep,
+  onOpenTool
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', content: "OverrideBot operational. Sequence diagnosis clear. Ready for directorial commands." }
@@ -112,6 +119,10 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
   const [guidance, setGuidance] = useState<DirectorGuidance | null>(null);
   const [isLoadingGuidance, setIsLoadingGuidance] = useState(false);
   const [guidanceExpanded, setGuidanceExpanded] = useState(true);
+  const [workflowExpanded, setWorkflowExpanded] = useState(true);
+  const [directorMode, setDirectorMode] = useState<'guided' | 'expert'>(
+    project.directorMode || 'guided'
+  );
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -329,6 +340,34 @@ RULES:
     }
   };
 
+  // Handle mode toggle
+  const handleModeToggle = () => {
+    const newMode = directorMode === 'guided' ? 'expert' : 'guided';
+    setDirectorMode(newMode);
+    onUpdateProject({ directorMode: newMode });
+    localStorage.setItem('director_mode_preference', newMode);
+  };
+
+  // Get workflow checklist
+  const checklist = useMemo(() => getPhaseChecklist(currentPhase, project), [currentPhase, project]);
+
+  // Get tool recommendations
+  const toolRecommendations = useMemo(() => getTopRecommendations(currentPhase, project, 2), [currentPhase, project]);
+
+  // Handle workflow step execution
+  const handleExecuteStep = async (stepId: string) => {
+    if (onExecuteWorkflowStep) {
+      await onExecuteWorkflowStep(stepId);
+    }
+  };
+
+  // Handle workflow step skip
+  const handleSkipStep = (stepId: string) => {
+    if (onSkipWorkflowStep) {
+      onSkipWorkflowStep(stepId);
+    }
+  };
+
   const phaseMeta = PHASE_META[currentPhase];
   const commands = PHASE_COMMANDS[currentPhase];
 
@@ -344,12 +383,26 @@ RULES:
               {isLive && <LiveWaveform stream={micStream} isActive={isLive} color="#ef4444" />}
             </div>
           </div>
-          <button
-            onClick={toggleLiveMode}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-widest border transition-all ${isLive ? 'bg-solar-amber/20 border-solar-amber text-solar-amber shadow-lg shadow-solar-amber/10' : 'nm-button border-white/10 text-mystic-gray hover:text-white'}`}
-          >
-            {isLive ? <><i className="fa-solid fa-microphone-slash mr-1"></i> End Session</> : <><i className="fa-solid fa-microphone mr-1"></i> Start Live</>}
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Mode Toggle */}
+            <button
+              onClick={handleModeToggle}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl text-[7px] font-black uppercase tracking-widest border transition-all nm-button border-white/10 hover:border-luna-gold/30 group"
+              title={directorMode === 'guided' ? 'Switch to Expert Mode (minimal interventions)' : 'Switch to Guided Mode (proactive assistance)'}
+            >
+              <i className={`fa-solid ${directorMode === 'guided' ? 'fa-bullseye' : 'fa-rocket'} text-[8px] text-luna-gold group-hover:scale-110 transition-transform`}></i>
+              <span className="text-mystic-gray group-hover:text-luna-gold transition-colors">
+                {directorMode === 'guided' ? 'Guided' : 'Expert'}
+              </span>
+            </button>
+
+            <button
+              onClick={toggleLiveMode}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-widest border transition-all ${isLive ? 'bg-solar-amber/20 border-solar-amber text-solar-amber shadow-lg shadow-solar-amber/10' : 'nm-button border-white/10 text-mystic-gray hover:text-white'}`}
+            >
+              {isLive ? <><i className="fa-solid fa-microphone-slash mr-1"></i> End Session</> : <><i className="fa-solid fa-microphone mr-1"></i> Start Live</>}
+            </button>
+          </div>
         </div>
         {/* Phase Indicator */}
         <div className="flex items-center gap-2 mt-2">
@@ -419,6 +472,47 @@ RULES:
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Workflow Progress (only in Guided mode) */}
+      {directorMode === 'guided' && (
+        <WorkflowProgress
+          phase={currentPhase}
+          checklist={checklist}
+          onExecuteStep={handleExecuteStep}
+          onSkipStep={handleSkipStep}
+          expanded={workflowExpanded}
+          onToggle={() => setWorkflowExpanded(!workflowExpanded)}
+        />
+      )}
+
+      {/* Tool Recommendations */}
+      {directorMode === 'guided' && toolRecommendations.length > 0 && (
+        <div className="border-b border-white/5 bg-gradient-to-r from-purple-500/5 to-transparent px-5 py-4">
+          <div className="flex items-center gap-2 mb-3">
+            <i className="fa-solid fa-tools text-purple-400 text-[10px]"></i>
+            <span className="text-[8px] font-black text-purple-400 uppercase tracking-widest">Recommended Tools</span>
+          </div>
+          <div className="space-y-2">
+            {toolRecommendations.map((rec) => (
+              <div key={rec.toolId} className="flex items-start justify-between p-3 rounded-lg nm-inset-input border border-white/5 hover:border-purple-400/20 transition-all group">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[9px] font-bold text-starlight group-hover:text-purple-400 transition-colors">{rec.toolName}</span>
+                    <span className="text-[6px] text-mystic-gray italic">• {rec.estimatedTime}</span>
+                  </div>
+                  <p className="text-[7px] text-celestial-stone">{rec.reason}</p>
+                </div>
+                <button
+                  onClick={() => onOpenTool && onOpenTool(rec.toolId)}
+                  className="ml-3 px-3 py-1.5 rounded-lg nm-button text-purple-400 text-[7px] font-black uppercase tracking-wider hover:bg-purple-400/10 transition-all border border-white/5 group-hover:border-purple-400/30"
+                >
+                  Open
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

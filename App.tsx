@@ -44,6 +44,23 @@ import {
   validateVideo,
   validateAudio
 } from './services/gemini';
+import {
+  getPhaseChecklist,
+  evaluateQualityGates,
+  QualityGate,
+  WorkflowStep,
+  markStepCompleted,
+  markStepSkipped,
+  canTransitionFromPhase
+} from './services/workflowOrchestrator';
+import {
+  evaluateTriggers,
+  evaluatePhaseTransition,
+  getIdleIntervention,
+  Intervention,
+  InterventionAction
+} from './services/interventionEngine';
+import { QualityGateModal, ActiveInterventions } from './components/WorkflowComponents';
 import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v8';
@@ -183,7 +200,49 @@ const App: React.FC = () => {
   const [pendingBatchQueue, setPendingBatchQueue] = useState<BatchQueue | null>(null);
   const [showResumeDialog, setShowResumeDialog] = useState(false);
 
+
+
+  // Workflow & Director State
+  const [activeInterventions, setActiveInterventions] = useState<Intervention[]>([]);
+  const [qualityGateModal, setQualityGateModal] = useState<{
+    visible: boolean;
+    gates: QualityGate[];
+    targetPhase: ProductionPhase | null;
+  }>({ visible: false, gates: [], targetPhase: null });
+  const [directorMode, setDirectorMode] = useState<'guided' | 'expert'>('guided');
+  const [workflowExpanded, setWorkflowExpanded] = useState(true);
+
+  const prevProjectRef = useRef<ProjectState>(project);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const checkPhaseGates = (targetPhase: ProductionPhase): boolean => {
+    // Only block if we are in a previous phase trying to move forward
+    // Or just strictly enforce current phase gates before "leaving" it.
+
+    // Map target to the phase we are leaving
+    // If target is manifest, we are leaving genesis.
+    // Use activePhase as the source of truth for what gates to check.
+
+    const { canTransition, blockers } = canTransitionFromPhase(activePhase, project);
+
+    // Only block if the target phase implies a transition forward
+    // e.g. active=genesis, target=manifest -> check genesis gates.
+    // If active=manifest, target=manifest -> don't block (re-running).
+    const phaseOrder: ProductionPhase[] = ['genesis', 'manifest', 'synthesis', 'post'];
+    const activeIdx = phaseOrder.indexOf(activePhase);
+    const targetIdx = phaseOrder.indexOf(targetPhase);
+
+    if (targetIdx > activeIdx && !canTransition) {
+      setQualityGateModal({
+        visible: true,
+        gates: blockers,
+        targetPhase
+      });
+      return false;
+    }
+    return true;
+  };
+
 
   const activePhase: ProductionPhase = !project.script ? 'genesis' : project.scenes.length === 0 ? 'genesis' : !Object.values(project.assets).some(a => a.status === 'complete') ? 'manifest' : project.scenes.every(s => project.assets[s.id]?.status === 'complete') ? 'post' : 'synthesis';
   const isAllComplete = project.scenes.length > 0 && project.scenes.every(s => project.assets[s.id]?.status === 'complete');
@@ -369,10 +428,31 @@ const App: React.FC = () => {
       setShowBRoll(true);
       return "B-Roll synthesis complete. Review suggestions in the terminal.";
     }
+    else if (name === 'check_workflow_progress') {
+      const { phase } = args;
+      const checklist = getPhaseChecklist(phase || activePhase, project);
+      return JSON.stringify(checklist);
+    } else if (name === 'suggest_optimization_tool') {
+      const { toolId, reason, autoOpen } = args;
+      addLog(`Director suggests ${toolId}: ${reason}`, "ai_suggestion");
+      if (autoOpen) {
+        // Map toolId to UI
+        if (toolId === 'script-doctor') setShowScriptDoctor(true);
+        if (toolId === 'continuity-auditor') setShowAuditor(true);
+        if (toolId === 'vfx-master') setShowMastering(true);
+        if (toolId === 'youtube-optimizer') setShowManifest(true);
+      }
+      return "Suggestion presented to user.";
+    } else if (name === 'execute_workflow_step') {
+      const { stepId } = args;
+      await handleExecuteWorkflowStep(stepId);
+      return `Workflow step ${stepId} initiated.`;
+    }
     return "Unknown tool.";
   };
 
   const handleAnalyze = async (script: string) => {
+    if (!checkPhaseGates('manifest')) return;
     if (!hasAuth) { await triggerApiKeySelection(); setHasAuth(true); return; }
     setProject(prev => ({ ...prev, status: 'analyzing', script }));
     setAutoDiagnosisTriggered(false);
@@ -716,6 +796,8 @@ const App: React.FC = () => {
     addLog("Opening character creator...", "system");
   };
 
+
+
   const handleManifestAll = async (resumeQueue?: BatchQueue) => {
     if (isBatchProcessing) return;
 
@@ -862,9 +944,119 @@ const App: React.FC = () => {
   const handleCancelBatch = () => {
     if (isBatchProcessing) {
       batchCancellationRef.current = true;
-      addLog("Cancelling batch processing...", "system");
+      addLog("Cancellation signal received. Stopping batch process...", "system");
     }
   };
+
+  // --- Workflow & Intervention Logic ---
+
+  useEffect(() => {
+    // Check for interventions on project update
+    const triggers = evaluateTriggers(project, prevProjectRef.current, directorMode === 'guided');
+
+    if (triggers.length > 0) {
+      setActiveInterventions(prev => {
+        const existingIds = new Set(prev.map(i => i.id));
+        const newInterventions = triggers.filter(t => !existingIds.has(t.id));
+        return [...newInterventions, ...prev]; // Newest first
+      });
+    }
+
+    prevProjectRef.current = project;
+  }, [project, directorMode]);
+
+  // Handle Workflow Step Execution
+  const handleExecuteWorkflowStep = async (stepId: string) => {
+    console.log('Executing step:', stepId);
+
+    // Map step IDs to actual App functions
+    switch (stepId) {
+      case 'analyze_script':
+        if (project.script) await handleAnalyze(project.script);
+        break;
+      case 'assign_voices':
+        // setView('characters') or open modal
+        // Assuming we have a way to open voice casting. For now:
+        setView('dashboard');
+        // trigger specific tab?
+        break;
+      case 'generate_assets':
+        await handleManifestAll();
+        break;
+      case 'set_key_art':
+        setShowAssetLibrary(true);
+        break;
+      case 'run_script_doctor':
+        setShowScriptDoctor(true);
+        break;
+      case 'run_continuity_audit':
+        setShowAuditor(true);
+        break;
+      case 'run_viral_analysis':
+      case 'generate_seo_metadata':
+        setShowManifest(true);
+        // Ideally scroll to optimizer section
+        break;
+      case 'apply_vfx_mastering':
+        setShowMastering(true);
+        break;
+      case 'add_moodboard':
+        // Scroll to moodboard
+        handleNavigatePhase('genesis');
+        break;
+      case 'review_timeline':
+        handleNavigatePhase('manifest');
+        break;
+    }
+
+    // Optimistically mark as completed for UI responsiveness
+    setProject(p => markStepCompleted(activePhase, stepId, p));
+  };
+
+  const handleSkipWorkflowStep = (stepId: string) => {
+    setProject(p => markStepSkipped(activePhase, stepId, p));
+  };
+
+  const handleExecuteInterventionAction = async (action: InterventionAction) => {
+    console.log('Executing intervention action:', action.actionId);
+
+    if (action.actionId) {
+      switch (action.actionId) {
+        case 'assign_voices':
+          // Open voice casting
+          break;
+        case 'generate_remaining_scenes':
+          await handleManifestAll();
+          break;
+        case 'run_continuity_audit':
+          setShowAuditor(true);
+          break;
+        case 'set_key_art':
+          setShowAssetLibrary(true);
+          break;
+        case 'apply_vfx_mastering':
+          setShowMastering(true);
+          break;
+        case 'analyze_viral_potential':
+        case 'generate_seo_metadata':
+          setShowManifest(true);
+          break;
+        case 'open_director_chat':
+          setChatOpen(true);
+          break;
+        case 'review_failed_scenes':
+          handleNavigatePhase('synthesis');
+          break;
+      }
+    }
+
+    // Dismiss parent intervention
+    // Need intervention ID to dismiss specific one. 
+    // Just remove top one or pass ID?
+    // For now we don't strictly remove, but we should.
+  };
+
+  // --- End Workflow Logic ---
 
   const handleAddBRoll = (newScenes: Scene[]) => {
     const initializedAssets = { ...project.assets };
@@ -1086,7 +1278,7 @@ const App: React.FC = () => {
                     </div>
                     <div className="flex gap-4">
                       {!isBatchProcessing ? (
-                        <button onClick={handleManifestAll} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
+                        <button onClick={() => handleManifestAll()} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
                           <i className="fa-solid fa-bolt-lightning animate-pulse"></i> Initialize Batch Manifest
                         </button>
                       ) : (
@@ -1200,11 +1392,48 @@ const App: React.FC = () => {
           <ErrorBoundary>
             <DirectorAssistant
               project={project}
-              onUpdateProject={updates => setProject(p => ({ ...p, ...updates }))}
+              onUpdateProject={(updates) => setProject(prev => ({ ...prev, ...updates }))}
               onExecuteTool={handleToolExecution}
-              autoTriggerDiagnosis={autoDiagnosisTriggered && chatOpen}
+              autoTriggerDiagnosis={autoDiagnosisTriggered}
               currentPhase={activePhase}
-              onNavigatePhase={handleNavigatePhase}
+              onExecuteWorkflowStep={handleExecuteWorkflowStep}
+              onSkipWorkflowStep={handleSkipWorkflowStep}
+              onOpenTool={(toolId) => {
+                switch (toolId) {
+                  case 'script-doctor': setShowScriptDoctor(true); break;
+                  case 'continuity-auditor': setShowAuditor(true); break;
+                  case 'vfx-master': setShowMastering(true); break;
+                  case 'audio-mixer': setShowMixer(true); break;
+                  case 'youtube-optimizer': setShowManifest(true); break;
+                  case 'moodboard': /* Add logic if needed */ break;
+                }
+              }}
+            />
+
+            {/* Workflow Overlays */}
+            <QualityGateModal
+              visible={qualityGateModal.visible}
+              gates={qualityGateModal.gates}
+              targetPhase={qualityGateModal.targetPhase || 'post'} // Fallback or handle null
+              onClose={() => setQualityGateModal(prev => ({ ...prev, visible: false }))}
+              onProceed={() => {
+                setQualityGateModal(prev => ({ ...prev, visible: false }));
+                if (qualityGateModal.targetPhase) {
+                  handleNavigatePhase(qualityGateModal.targetPhase);
+                }
+              }}
+              onFixGate={async (gateOrId) => {
+                // Handle auto-fix
+                const gateId = typeof gateOrId === 'string' ? gateOrId : (gateOrId as any).id;
+                // Implement logic
+              }}
+              onOverride={() => {
+                // Allow transition
+                if (qualityGateModal.targetPhase) {
+                  handleNavigatePhase(qualityGateModal.targetPhase);
+                  setQualityGateModal(prev => ({ ...prev, visible: false }));
+                }
+              }}
             />
           </ErrorBoundary>
         </div>

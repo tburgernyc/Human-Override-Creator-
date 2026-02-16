@@ -11,7 +11,9 @@ async function listModels() {
   const ai = new GoogleGenAI({ apiKey });
 
   try {
-    const models = await ai.models.list();
+    const response = await ai.models.list();
+    // @ts-ignore - Pager type mismatch in current SDK version
+    const models = response.models || response || [];
     console.log('\n📋 Available Gemini Models:\n');
 
     for (const model of models) {

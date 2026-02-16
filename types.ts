@@ -131,6 +131,26 @@ export interface ViralPotential {
   predictionSummary: string;
 }
 
+export type ProductionPhase = 'genesis' | 'manifest' | 'synthesis' | 'post';
+
+export interface ToolUsageRecord {
+  toolId: string;
+  timestamp: number;
+  result?: any;
+}
+
+export interface InterventionRecord {
+  interventionId: string;
+  timestamp: number;
+  action: 'executed' | 'dismissed';
+}
+
+export interface PhaseProgress {
+  completedSteps: string[];
+  skippedSteps: string[];
+  lastUpdated: number;
+}
+
 export interface ProjectState {
   script: string;
   status: 'idle' | 'analyzing' | 'character_gen' | 'scene_gen' | 'animating' | 'audio_gen' | 'validating' | 'rendering' | 'ready';
@@ -159,6 +179,14 @@ export interface ProjectState {
     filmBurnIntensity: number;
     lutPreset?: 'none' | 'kodak_5219' | 'fuji_400h' | 'noir' | 'technicolor';
   };
+
+  // Workflow tracking
+  workflowProgress?: Record<ProductionPhase, PhaseProgress>;
+  toolUsageHistory?: ToolUsageRecord[];
+  interventionHistory?: InterventionRecord[];
+  directorMode?: 'guided' | 'expert';
+  qualityGateOverrides?: string[];
+  lastActivityTimestamp?: number;
 }
 
 export enum AspectRatio {
