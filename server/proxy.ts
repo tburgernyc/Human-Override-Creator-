@@ -4,8 +4,12 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { renderMP4 } from './renderer';
+import { projectsRouter } from './projects';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
 
 // Railway sets PORT; fall back to PROXY_PORT for local dev
@@ -69,8 +73,6 @@ app.all('/api/gemini/{*path}', async (req: any, res) => {
         res.status(500).json({ error: 'Proxy request failed', details: error.message });
     }
 });
-
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Director Chat Endpoint - Streaming
 app.post('/api/director/chat', async (req, res) => {
@@ -211,8 +213,6 @@ app.post('/api/director/chat-vision', async (req, res) => {
 });
 
 // ─── Server-side FFmpeg render ────────────────────────────────────────────────
-import { renderMP4, getRenderJobStatus } from './renderer';
-
 app.post('/api/render', express.json({ limit: '2gb' }), async (req, res) => {
     try {
         const { frames, fps, resolution, format } = req.body;
@@ -231,7 +231,6 @@ app.post('/api/render', express.json({ limit: '2gb' }), async (req, res) => {
 });
 
 // ─── Project persistence ──────────────────────────────────────────────────────
-import { projectsRouter } from './projects';
 app.use('/api/projects', projectsRouter);
 
 // SPA catch-all — serve index.html for any non-API route so React Router works
