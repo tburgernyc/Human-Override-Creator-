@@ -34,7 +34,7 @@ export const QUALITY_GATES: Record<ProductionPhase, QualityGate[]> = {
   genesis: [
     {
       id: 'has_script',
-      condition: (p) => p.script && p.script.length > 50,
+      condition: (p) => !!(p.script && p.script.length > 50),
       message: 'Script is required to proceed',
       severity: 'blocker',
       autoFixable: false
@@ -502,7 +502,7 @@ export function markStepCompleted(
       [phase]: {
         ...phaseProgress,
         completedSteps: [...new Set([...phaseProgress.completedSteps, stepId])],
-        skippedSteps: phaseProgress.skippedSteps.filter(id => id !== stepId),
+        skippedSteps: phaseProgress.skippedSteps.filter((id: string) => id !== stepId),
         lastUpdated: Date.now()
       }
     }
@@ -527,7 +527,7 @@ export function markStepSkipped(
       [phase]: {
         ...phaseProgress,
         skippedSteps: [...new Set([...phaseProgress.skippedSteps, stepId])],
-        completedSteps: phaseProgress.completedSteps.filter(id => id !== stepId),
+        completedSteps: phaseProgress.completedSteps.filter((id: string) => id !== stepId),
         lastUpdated: Date.now()
       }
     }

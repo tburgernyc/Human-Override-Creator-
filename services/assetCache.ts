@@ -1,162 +1,192 @@
-// Asset caching service to reduce redundant API calls
-// Stores generated images/videos in localStorage with LRU eviction
+// Asset caching service — IndexedDB backend (replaces localStorage)
+// DB: human_override_assets_v2  |  Max: 500MB / 500 entries
+
+const DB_NAME = 'human_override_assets_v2';
+const DB_VERSION = 1;
+const STORE_NAME = 'assets';
+const MAX_ENTRIES = 500;
+const MAX_SIZE_BYTES = 500 * 1024 * 1024; // 500MB
 
 interface CacheEntry {
   hash: string;
   assetUrl: string;
   timestamp: number;
-  size: number; // Approximate size in bytes
+  size: number;
 }
 
-const CACHE_KEY = 'human_override_asset_cache_v1';
-const MAX_ENTRIES = 50;
-const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+// ─── IndexedDB helpers ──────────────────────────────────────────────────────
 
-// Simple hash function for cache keys
+let _db: IDBDatabase | null = null;
+
+const openDB = (): Promise<IDBDatabase> => {
+  if (_db) return Promise.resolve(_db);
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB not available'));
+      return;
+    }
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        const store = db.createObjectStore(STORE_NAME, { keyPath: 'hash' });
+        store.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+    };
+    req.onsuccess = () => {
+      _db = req.result;
+      resolve(_db);
+    };
+    req.onerror = () => reject(req.error);
+  });
+};
+
+const dbGet = async (hash: string): Promise<CacheEntry | undefined> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).get(hash);
+    req.onsuccess = () => resolve(req.result as CacheEntry | undefined);
+    req.onerror = () => reject(req.error);
+  });
+};
+
+const dbPut = async (entry: CacheEntry): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).put(entry);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+};
+
+const dbGetAll = async (): Promise<CacheEntry[]> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => resolve(req.result as CacheEntry[]);
+    req.onerror = () => reject(req.error);
+  });
+};
+
+const dbDelete = async (hash: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).delete(hash);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+};
+
+const dbClear = async (): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+};
+
+// ─── Utilities ──────────────────────────────────────────────────────────────
+
 const hashKey = (...parts: string[]): string => {
   const combined = parts.join('|');
   let hash = 0;
   for (let i = 0; i < combined.length; i++) {
     const char = combined.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
+    hash = hash & hash;
   }
   return Math.abs(hash).toString(36);
 };
 
-// Estimate base64 data URI size
-const estimateSize = (dataUri: string): number => {
-  return dataUri.length * 0.75; // Base64 is ~33% larger than binary
-};
+const estimateSize = (dataUri: string): number => dataUri.length * 0.75;
 
-// Load cache from localStorage
-const loadCache = (): CacheEntry[] => {
-  try {
-    const saved = localStorage.getItem(CACHE_KEY);
-    if (saved) {
-      return JSON.parse(saved);
-    }
-  } catch (e) {
-    console.warn('[AssetCache] Failed to load cache:', e);
+// LRU eviction: keep newest MAX_ENTRIES entries under MAX_SIZE_BYTES
+const evictIfNeeded = async (all: CacheEntry[]): Promise<void> => {
+  // Sort oldest first
+  all.sort((a, b) => a.timestamp - b.timestamp);
+
+  while (all.length > MAX_ENTRIES) {
+    const evicted = all.shift()!;
+    await dbDelete(evicted.hash);
+    console.log(`[AssetCache] Evicted by count: ${evicted.hash}`);
   }
-  return [];
-};
 
-// Save cache to localStorage
-const saveCache = (entries: CacheEntry[]): void => {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(entries));
-  } catch (e) {
-    console.warn('[AssetCache] Failed to save cache:', e);
-    // If quota exceeded, clear cache and try again
-    clearCache();
+  let totalSize = all.reduce((sum, e) => sum + e.size, 0);
+  while (totalSize > MAX_SIZE_BYTES && all.length > 0) {
+    const evicted = all.shift()!;
+    totalSize -= evicted.size;
+    await dbDelete(evicted.hash);
+    console.log(`[AssetCache] Evicted by size: ${evicted.hash}`);
   }
 };
 
-// Get cached asset
-export const getCachedAsset = (
+// ─── Public API ─────────────────────────────────────────────────────────────
+
+export const getCachedAsset = async (
   visualPrompt: string,
   style: string,
   resolution: string,
   aspectRatio: string,
   seed: number
-): string | null => {
-  const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString());
-  const cache = loadCache();
-  const entry = cache.find(e => e.hash === hash);
-
-  if (entry) {
-    console.log(`[AssetCache] Cache HIT for hash ${hash}`);
-    // Update timestamp for LRU
-    entry.timestamp = Date.now();
-    saveCache(cache);
-    return entry.assetUrl;
+): Promise<string | null> => {
+  try {
+    const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString());
+    const entry = await dbGet(hash);
+    if (entry) {
+      console.log(`[AssetCache] HIT ${hash}`);
+      // Refresh LRU timestamp
+      await dbPut({ ...entry, timestamp: Date.now() });
+      return entry.assetUrl;
+    }
+    console.log(`[AssetCache] MISS ${hash}`);
+    return null;
+  } catch (e) {
+    console.warn('[AssetCache] getCachedAsset error:', e);
+    return null;
   }
-
-  console.log(`[AssetCache] Cache MISS for hash ${hash}`);
-  return null;
 };
 
-// Store asset in cache
-export const cacheAsset = (
+export const cacheAsset = async (
   assetUrl: string,
   visualPrompt: string,
   style: string,
   resolution: string,
   aspectRatio: string,
   seed: number
-): void => {
-  const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString());
-  const size = estimateSize(assetUrl);
-  let cache = loadCache();
-
-  // Check if already cached
-  const existingIndex = cache.findIndex(e => e.hash === hash);
-  if (existingIndex >= 0) {
-    cache[existingIndex].timestamp = Date.now();
-    cache[existingIndex].assetUrl = assetUrl;
-    saveCache(cache);
-    return;
-  }
-
-  // Add new entry
-  const newEntry: CacheEntry = {
-    hash,
-    assetUrl,
-    timestamp: Date.now(),
-    size
-  };
-  cache.push(newEntry);
-
-  // Apply LRU eviction if needed
-  cache = evictIfNeeded(cache);
-  saveCache(cache);
-  console.log(`[AssetCache] Cached asset ${hash} (${(size / 1024).toFixed(1)} KB)`);
-};
-
-// Evict oldest entries if cache exceeds limits
-const evictIfNeeded = (cache: CacheEntry[]): CacheEntry[] => {
-  // Sort by timestamp (oldest first)
-  cache.sort((a, b) => a.timestamp - b.timestamp);
-
-  // Evict by count
-  while (cache.length > MAX_ENTRIES) {
-    const evicted = cache.shift();
-    console.log(`[AssetCache] Evicted by count: ${evicted?.hash}`);
-  }
-
-  // Evict by size
-  let totalSize = cache.reduce((sum, e) => sum + e.size, 0);
-  while (totalSize > MAX_SIZE_BYTES && cache.length > 0) {
-    const evicted = cache.shift();
-    if (evicted) {
-      totalSize -= evicted.size;
-      console.log(`[AssetCache] Evicted by size: ${evicted.hash} (${(evicted.size / 1024).toFixed(1)} KB)`);
-    }
-  }
-
-  // Re-sort by timestamp (newest first) for efficient access
-  cache.sort((a, b) => b.timestamp - a.timestamp);
-  return cache;
-};
-
-// Clear entire cache
-export const clearCache = (): void => {
+): Promise<void> => {
   try {
-    localStorage.removeItem(CACHE_KEY);
+    const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString());
+    const size = estimateSize(assetUrl);
+    await dbPut({ hash, assetUrl, timestamp: Date.now(), size });
+    console.log(`[AssetCache] Cached ${hash} (${(size / 1024).toFixed(1)} KB)`);
+    // Evict async — don't block caller
+    dbGetAll().then(evictIfNeeded).catch(() => {});
+  } catch (e) {
+    console.warn('[AssetCache] cacheAsset error:', e);
+  }
+};
+
+export const clearCache = async (): Promise<void> => {
+  try {
+    await dbClear();
     console.log('[AssetCache] Cache cleared');
   } catch (e) {
-    console.warn('[AssetCache] Failed to clear cache:', e);
+    console.warn('[AssetCache] clearCache error:', e);
   }
 };
 
-// Get cache statistics
-export const getCacheStats = (): { entries: number, totalSize: number, maxSize: number } => {
-  const cache = loadCache();
-  const totalSize = cache.reduce((sum, e) => sum + e.size, 0);
-  return {
-    entries: cache.length,
-    totalSize,
-    maxSize: MAX_SIZE_BYTES
-  };
+export const getCacheStats = async (): Promise<{ entries: number; totalSize: number; maxSize: number }> => {
+  try {
+    const all = await dbGetAll();
+    const totalSize = all.reduce((sum, e) => sum + e.size, 0);
+    return { entries: all.length, totalSize, maxSize: MAX_SIZE_BYTES };
+  } catch (e) {
+    return { entries: 0, totalSize: 0, maxSize: MAX_SIZE_BYTES };
+  }
 };

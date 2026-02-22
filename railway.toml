@@ -1,0 +1,20 @@
+[build]
+builder = "NIXPACKS"
+buildCommand = "npm run build"
+
+[deploy]
+startCommand = "npm run start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# ─── Persistent Project Storage ───────────────────────────────────────────────
+# server/projects.ts writes project saves to ./data/projects.json.
+# Railway's default filesystem is ephemeral (wiped on redeploy).
+#
+# To enable persistent project saves across redeploys:
+#   1. Open your Railway service dashboard
+#   2. Go to Settings → Volumes
+#   3. Add a Volume mounted at /app/data
+#
+# Without a Volume, projects persist across restarts but are lost on redeploy.
+# The app still works fully — localStorage is the primary save layer.

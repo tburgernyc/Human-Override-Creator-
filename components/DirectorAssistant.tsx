@@ -18,6 +18,9 @@ interface DirectorAssistantProps {
   onExecuteWorkflowStep?: (stepId: string) => Promise<void>;
   onSkipWorkflowStep?: (stepId: string) => void;
   onOpenTool?: (toolId: string) => void;
+  /** External message to inject (e.g. from "Ask Director" CTA buttons) */
+  pendingInjection?: string | null;
+  onClearInjection?: () => void;
 }
 
 const PHASE_META: Record<ProductionPhase, { label: string; icon: string; color: string; next?: ProductionPhase; nextLabel?: string }> = {
@@ -107,7 +110,9 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
   onNavigatePhase,
   onExecuteWorkflowStep,
   onSkipWorkflowStep,
-  onOpenTool
+  onOpenTool,
+  pendingInjection,
+  onClearInjection,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', content: "OverrideBot operational. Sequence diagnosis clear. Ready for directorial commands." }
@@ -129,25 +134,42 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
   const sessionRef = useRef<any>(null);
   const diagnosisRanRef = useRef(false);
   const lastPhaseRef = useRef<ProductionPhase>(currentPhase);
+  // OPT-05: Debounce + memoize guidance fetches to prevent per-scene-completion re-calls
+  const guidanceCacheRef = useRef<Map<string, DirectorGuidance>>(new Map());
+  const guidanceDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
-  // Fetch guidance when phase changes
+  // Fetch guidance when phase/scene/character count changes — debounced + memoized
   useEffect(() => {
-    const fetchGuidance = async () => {
+    const completedAssets = Object.values(project.assets || {}).filter(a => a?.status === 'complete').length;
+    const hasMissingVoices = project.characters.some(c => !c.voiceId);
+    const cacheKey = `${currentPhase}|${project.scenes.length}|${project.characters.length}|${completedAssets}|${hasMissingVoices}`;
+
+    if (guidanceCacheRef.current.has(cacheKey)) {
+      setGuidance(guidanceCacheRef.current.get(cacheKey)!);
+      return;
+    }
+
+    if (guidanceDebounceRef.current) clearTimeout(guidanceDebounceRef.current);
+    guidanceDebounceRef.current = setTimeout(async () => {
       setIsLoadingGuidance(true);
       try {
         const g = await getDirectorGuidance(currentPhase, project);
+        guidanceCacheRef.current.set(cacheKey, g);
         setGuidance(g);
       } catch {
         // Guidance fetch failed silently — fallback already handled in service
       } finally {
         setIsLoadingGuidance(false);
       }
+    }, 5000);
+
+    return () => {
+      if (guidanceDebounceRef.current) clearTimeout(guidanceDebounceRef.current);
     };
-    fetchGuidance();
   }, [currentPhase, project.scenes.length, project.characters.length]);
 
   // Auto-trigger phase transition message
@@ -166,6 +188,7 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
       // Auto-send phase transition analysis
       handleSubmit(undefined, `The production has just transitioned from ${prevName} phase to ${phaseName} phase. Analyze the current state of the project for this new phase. What should I focus on? Are there any issues from the previous phase that need attention? Provide your phase transition briefing.`);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPhase]);
 
   useEffect(() => {
@@ -189,7 +212,17 @@ RULES:
 - Match voice gender: Female voices for female characters, Male voices for male characters
 - Consider character age, authority level, and emotional range when picking voices`);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoTriggerDiagnosis]);
+
+  // Fire injected messages (e.g. from "Ask Director" CTA buttons)
+  useEffect(() => {
+    if (pendingInjection) {
+      handleSubmit(undefined, pendingInjection);
+      onClearInjection?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingInjection]);
 
   const handleSubmit = async (e?: React.FormEvent, customInput?: string) => {
     if (e) e.preventDefault();

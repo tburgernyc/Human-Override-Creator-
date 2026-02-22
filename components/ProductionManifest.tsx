@@ -156,7 +156,7 @@ export const ProductionManifest: React.FC<ProductionManifestProps> = ({ project,
                                         const statusColor =
                                             item.status === 'Optimal' || item.status === 'High' || item.status === 'Calibrated' ? 'text-deep-sage' :
                                             item.status === 'Warning' ? 'text-solar-amber' :
-                                            'text-crimson-red';
+                                            'text-red-500';
 
                                         return (
                                           <div key={i} className="flex gap-6 p-6 rounded-2xl hover:bg-white/5 transition-colors border border-transparent hover:border-white/5 group">
@@ -177,18 +177,18 @@ export const ProductionManifest: React.FC<ProductionManifestProps> = ({ project,
 
                                 <div className={`mt-12 p-6 rounded-2xl flex items-center justify-between ${
                                     overallHealth === 'EXCELLENT' ? 'bg-luna-gold/10 border border-luna-gold/20' :
-                                    overallHealth === 'CRITICAL' ? 'bg-crimson-red/10 border border-crimson-red/20' :
+                                    overallHealth === 'CRITICAL' ? 'bg-red-500/10 border border-red-500/20' :
                                     'bg-solar-amber/10 border border-solar-amber/20'
                                 }`}>
                                     <div className="flex items-center gap-4">
                                         <div className={`w-3 h-3 rounded-full animate-pulse ${
                                             overallHealth === 'EXCELLENT' ? 'bg-luna-gold shadow-[0_0_10px_#3b82f6]' :
-                                            overallHealth === 'CRITICAL' ? 'bg-crimson-red shadow-[0_0_10px_#ef4444]' :
+                                            overallHealth === 'CRITICAL' ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' :
                                             'bg-solar-amber shadow-[0_0_10px_#f59e0b]'
                                         }`}></div>
                                         <p className={`text-[10px] font-bold uppercase tracking-widest ${
                                             overallHealth === 'EXCELLENT' ? 'text-luna-gold' :
-                                            overallHealth === 'CRITICAL' ? 'text-crimson-red' :
+                                            overallHealth === 'CRITICAL' ? 'text-red-500' :
                                             'text-solar-amber'
                                         }`}>Production Health: {overallHealth}</p>
                                     </div>

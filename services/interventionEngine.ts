@@ -29,7 +29,8 @@ export interface InterventionTrigger {
   cooldown?: number; // Min ms between same trigger
 }
 
-// Cooldown tracking
+// Cooldown tracking (with max size to prevent memory leaks)
+const MAX_TRIGGER_HISTORY = 50;
 const triggerHistory: Map<string, number> = new Map();
 
 /**
@@ -49,6 +50,15 @@ function isOnCooldown(triggerId: string, cooldownMs: number = 0): boolean {
  */
 function recordTrigger(triggerId: string) {
   triggerHistory.set(triggerId, Date.now());
+  // Evict oldest entries if map grows too large
+  if (triggerHistory.size > MAX_TRIGGER_HISTORY) {
+    let oldestKey: string | null = null;
+    let oldestTime = Infinity;
+    for (const [key, time] of triggerHistory) {
+      if (time < oldestTime) { oldestTime = time; oldestKey = key; }
+    }
+    if (oldestKey) triggerHistory.delete(oldestKey);
+  }
 }
 
 /**
@@ -272,9 +282,10 @@ export const INTERVENTION_TRIGGERS: InterventionTrigger[] = [
     priority: 6,
     cooldown: 20 * 60 * 1000, // 20 minutes
     condition: (project, prevState) => {
-      // This will be triggered by phase detection in the main app
-      // For now, just check if in post phase without viral data
-      return !project.viralData && project.scenes.length > 0;
+      // Only trigger in post phase: all scenes must be complete
+      const allComplete = project.scenes.length > 0 &&
+        project.scenes.every(s => project.assets?.[s.id]?.status === 'complete');
+      return allComplete && !project.viralData;
     },
     intervention: {
       id: 'missing_viral_analysis',
@@ -302,7 +313,7 @@ export const INTERVENTION_TRIGGERS: InterventionTrigger[] = [
     cooldown: 0,
     condition: (project, prevState) => {
       const hadNoData = !prevState?.viralData;
-      const hasHighScore = project.viralData && project.viralData.hookScore >= 80;
+      const hasHighScore = !!(project.viralData && project.viralData.hookScore >= 80);
       return hadNoData && hasHighScore;
     },
     intervention: {

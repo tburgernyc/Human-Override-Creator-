@@ -162,7 +162,7 @@ export const SceneCard: React.FC<SceneCardProps> = ({
         );
     }
 
-    const sceneChars = characters.filter(c => scene.charactersInScene.includes(c.name));
+    const sceneChars = characters.filter(c => (scene.charactersInScene || []).includes(c.name));
     const takeCount = asset?.variants?.length || 0;
 
     const statusSteps = [

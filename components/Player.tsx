@@ -16,6 +16,9 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
     const [isPlaying, setIsPlaying] = useState(false);
     const [progress, setProgress] = useState(0);
 
+    const isPlayingRef = useRef(isPlaying);
+    useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
     const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -161,7 +164,7 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
 
         startTimeRef.current = Date.now();
         const updateProgress = () => {
-            if (checkCancelled() || !isPlaying) return;
+            if (checkCancelled() || !isPlayingRef.current) return;
             const elapsed = Date.now() - startTimeRef.current;
             const p = Math.min(elapsed / durationMs, 1);
             setProgress(p * 100);

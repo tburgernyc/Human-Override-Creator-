@@ -278,7 +278,7 @@ interface QualityGateModalProps {
   onClose: () => void;
   onProceed: () => void;
   onFixGate: (gateId: string) => Promise<void>;
-  onOverride: (gateId: string) => void;
+  onOverride: () => void;
 }
 
 export const QualityGateModal: React.FC<QualityGateModalProps> = ({

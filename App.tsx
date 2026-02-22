@@ -1,33 +1,43 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, Suspense, lazy } from 'react';
 import { Layout } from './components/Layout';
 import { ScriptInput } from './components/ScriptInput';
-import { SceneCard } from './components/SceneCard';
-import { Player } from './components/Player';
-import { Renderer } from './components/Renderer';
-import { CharacterModal } from './components/CharacterModal';
-import { LandingPage } from './components/LandingPage';
-import { ProjectsView } from './components/ProjectsView';
-import { SceneInspector } from './components/SceneInspector';
-import { ProductionManifest } from './components/ProductionManifest';
-import { ProductionTimeline } from './components/ProductionTimeline';
-import { CastEnsemble } from './components/CastEnsemble';
-import { DirectorAssistant } from './components/DirectorAssistant';
-import { YouTubeOptimizer } from './components/YouTubeOptimizer';
-import { AssetLibrary } from './components/AssetLibrary';
+import { SceneCard } from './components/SceneCard';  // eager — rendered in every scene grid
 import { ProductionMonitor } from './components/ProductionMonitor';
-import { AudioMixer } from './components/AudioMixer';
-import { ContinuityAuditor } from './components/ContinuityAuditor';
-import { DirectorialDeck } from './components/DirectorialDeck';
-import { BRollSuggestionModal } from './components/BRollSuggestionModal';
-import { DirectorDraftModal } from './components/DirectorDraftModal';
-import { StoryboardView } from './components/StoryboardView';
-import { ScriptDoctor } from './components/ScriptDoctor';
-import { VFXMaster } from './components/VFXMaster';
-import { Moodboard } from './components/Moodboard';
 import { ProductionStageOverview } from './components/ProductionStageOverview';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft } from './types';
+
+// ── Lazy-loaded views (only fetched when the user navigates to them) ──────────
+const LandingPage       = lazy(() => import('./components/LandingPage').then(m => ({ default: m.LandingPage })));
+const ProjectsView      = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })));
+
+// ── Lazy-loaded phase workspaces ─────────────────────────────────────────────
+const ScriptDoctor      = lazy(() => import('./components/ScriptDoctor').then(m => ({ default: m.ScriptDoctor })));
+const Moodboard         = lazy(() => import('./components/Moodboard').then(m => ({ default: m.Moodboard })));
+const CastEnsemble      = lazy(() => import('./components/CastEnsemble').then(m => ({ default: m.CastEnsemble })));
+const ProductionTimeline = lazy(() => import('./components/ProductionTimeline').then(m => ({ default: m.ProductionTimeline })));
+const YouTubeOptimizer  = lazy(() => import('./components/YouTubeOptimizer').then(m => ({ default: m.YouTubeOptimizer })));
+
+// ── Lazy-loaded Director sidebar ─────────────────────────────────────────────
+const DirectorAssistant = lazy(() => import('./components/DirectorAssistant').then(m => ({ default: m.DirectorAssistant })));
+
+// ── Lazy-loaded modals (fetched on first open) ───────────────────────────────
+const CharacterModal      = lazy(() => import('./components/CharacterModal').then(m => ({ default: m.CharacterModal })));
+const SceneInspector      = lazy(() => import('./components/SceneInspector').then(m => ({ default: m.SceneInspector })));
+const Player              = lazy(() => import('./components/Player').then(m => ({ default: m.Player })));
+const Renderer            = lazy(() => import('./components/Renderer').then(m => ({ default: m.Renderer })));
+const AssetLibrary        = lazy(() => import('./components/AssetLibrary').then(m => ({ default: m.AssetLibrary })));
+const AudioMixer          = lazy(() => import('./components/AudioMixer').then(m => ({ default: m.AudioMixer })));
+const ContinuityAuditor   = lazy(() => import('./components/ContinuityAuditor').then(m => ({ default: m.ContinuityAuditor })));
+const ConsistencyDashboard = lazy(() => import('./components/ConsistencyDashboard').then(m => ({ default: m.ConsistencyDashboard })));
+const DirectorialDeck     = lazy(() => import('./components/DirectorialDeck').then(m => ({ default: m.DirectorialDeck })));
+const BRollSuggestionModal = lazy(() => import('./components/BRollSuggestionModal').then(m => ({ default: m.BRollSuggestionModal })));
+const DirectorDraftModal  = lazy(() => import('./components/DirectorDraftModal').then(m => ({ default: m.DirectorDraftModal })));
+const StoryboardView      = lazy(() => import('./components/StoryboardView').then(m => ({ default: m.StoryboardView })));
+const VFXMaster           = lazy(() => import('./components/VFXMaster').then(m => ({ default: m.VFXMaster })));
+const ProductionManifest  = lazy(() => import('./components/ProductionManifest').then(m => ({ default: m.ProductionManifest })));
+
+import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft, ProductionPhase, LightingBrief, ConsistencyScore } from './types';
 import {
   analyzeScript,
   generateCharacterImage,
@@ -42,7 +52,16 @@ import {
   extendSceneVideo,
   validateImage,
   validateVideo,
-  validateAudio
+  validateAudio,
+  assignShotList,
+  enrichVisualPrompt,
+  buildCanonicalPrompt,
+  synthesizeCharacterDNA,
+  reformatScript,
+  optimizeCharacterVisualPrompt,
+  generateLightingBrief,
+  auditCharacterConsistency,
+  ConsistencyAuditResult,
 } from './services/gemini';
 import {
   getPhaseChecklist,
@@ -61,7 +80,10 @@ import {
   InterventionAction
 } from './services/interventionEngine';
 import { QualityGateModal, ActiveInterventions } from './components/WorkflowComponents';
-import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
+import { VOICE_PRESETS, VISUAL_STYLES, INITIAL_SCRIPT_PLACEHOLDER } from './constants';
+import { ProductionRail, computePhaseCompletion } from './components/ProductionRail';
+import { PhaseCTA, CTACheckItem } from './components/PhaseCTA';
+import { DirectorSidebar } from './components/DirectorSidebar';
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v8';
 const LEGACY_STORAGE_KEY = 'human_override_active_project_v7';
@@ -76,11 +98,9 @@ interface BatchQueue {
   timestamp: number;
 }
 
-type ProductionPhase = 'genesis' | 'manifest' | 'synthesis' | 'post';
-
 const App: React.FC = () => {
   const DEFAULT_PROJECT: ProjectState = {
-    script: '', status: 'idle', characters: [], scenes: [], assets: {}, tasks: [], modules: {}, productionLog: [],
+    script: INITIAL_SCRIPT_PLACEHOLDER, status: 'idle', characters: [], scenes: [], assets: {}, tasks: [], modules: {}, productionLog: [],
     currentStepMessage: '', globalStyle: VISUAL_STYLES[0], productionSeed: Math.floor(Math.random() * 1000000),
     activeDraft: null,
     mastering: {
@@ -125,6 +145,20 @@ const App: React.FC = () => {
       let saved = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
+        // Reset any status that was saved mid-operation (analyzing, generating, etc.)
+        // so buttons are never permanently disabled on reload
+        if (parsed.status && parsed.status !== 'idle' && parsed.status !== 'ready') {
+          parsed.status = parsed.scenes?.length > 0 ? 'ready' : 'idle';
+        }
+        // Reset stuck asset generating states
+        if (parsed.assets) {
+          for (const key of Object.keys(parsed.assets)) {
+            const asset = parsed.assets[key];
+            if (asset.status && asset.status.startsWith('generating_')) {
+              asset.status = asset.imageUrl || asset.videoUrl || asset.audioUrl ? 'complete' : 'pending';
+            }
+          }
+        }
         console.log('Loaded project from v8 storage');
         return parsed;
       }
@@ -176,29 +210,57 @@ const App: React.FC = () => {
 
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.LANDSCAPE);
   const [resolution, setResolution] = useState<Resolution>(Resolution.FHD);
-  const [showPlayer, setShowPlayer] = useState(false);
-  const [showRenderer, setShowRenderer] = useState(false);
-  const [showMastering, setShowMastering] = useState(false);
-  const [showManifest, setShowManifest] = useState(false);
-  const [showAssetLibrary, setShowAssetLibrary] = useState(false);
-  const [showMixer, setShowMixer] = useState(false);
-  const [showAuditor, setShowAuditor] = useState(false);
-  const [showDeck, setShowDeck] = useState(false);
-  const [showBRoll, setShowBRoll] = useState(false);
-  const [showStoryboard, setShowStoryboard] = useState(false);
-  const [showScriptDoctor, setShowScriptDoctor] = useState(false);
+  const [serverRenderMode, setServerRenderMode] = useState<'webm' | 'mp4-server'>('webm');
+  const [isAssigningShotList, setIsAssigningShotList] = useState(false);
   const [inspectingScene, setInspectingScene] = useState<Scene | null>(null);
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [bRollSuggestions, setBRollSuggestions] = useState<Scene[]>([]);
   const [currentTaskLabel, setCurrentTaskLabel] = useState("");
-  const [hasAuth, setHasAuth] = useState(false);
+  const [hasAuth, setHasAuth] = useState(() => typeof window === 'undefined' || !(window as any).aistudio);
   const [chatOpen, setChatOpen] = useState(false);
   const batchCancellationRef = useRef(false);
   const [youtubeMetadata, setYoutubeMetadata] = useState<any | null>(null);
   const [autoDiagnosisTriggered, setAutoDiagnosisTriggered] = useState(false);
   const [pendingBatchQueue, setPendingBatchQueue] = useState<BatchQueue | null>(null);
   const [showResumeDialog, setShowResumeDialog] = useState(false);
+
+  // ── Single modal slot — replaces 13 individual show* booleans ────────────
+  type ActiveModal =
+    | { type: 'player' }
+    | { type: 'renderer' }
+    | { type: 'vfx' }
+    | { type: 'audio_mixer' }
+    | { type: 'manifest' }
+    | { type: 'asset_library' }
+    | { type: 'continuity_auditor' }
+    | { type: 'consistency_dashboard' }
+    | { type: 'directorial_deck' }
+    | { type: 'broll' }
+    | { type: 'storyboard' }
+    | { type: 'script_doctor' }
+    | null;
+  const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+  const closeModal = () => setActiveModal(null);
+
+  // ── Tab-based phase navigation ─────────────────────────────────────────────
+  const [selectedStudioPhase, setSelectedStudioPhase] = useState<ProductionPhase>(() => {
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (saved) {
+        const p = JSON.parse(saved);
+        if (!p.script) return 'genesis';
+        if (!p.scenes?.length) return 'genesis';
+        if (!Object.values(p.assets || {}).some((a: any) => a.status === 'complete')) return 'manifest';
+        if (p.scenes.every((s: any) => p.assets[s.id]?.status === 'complete')) return 'post';
+        return 'synthesis';
+      }
+    } catch {}
+    return 'genesis';
+  });
+
+  // ── Director injection — "Ask Director" from error cards ──────────────────
+  const [directorInjection, setDirectorInjection] = useState<string | null>(null);
 
 
 
@@ -248,7 +310,7 @@ const App: React.FC = () => {
   const isAllComplete = project.scenes.length > 0 && project.scenes.every(s => project.assets[s.id]?.status === 'complete');
 
   useEffect(() => {
-    const checkAuth = async () => { if (window.aistudio) setHasAuth(await window.aistudio.hasSelectedApiKey()); else setHasAuth(true); };
+    const checkAuth = async () => { if ((window as any).aistudio) setHasAuth(await (window as any).aistudio.hasSelectedApiKey()); else setHasAuth(true); };
     checkAuth();
   }, []);
 
@@ -375,7 +437,7 @@ const App: React.FC = () => {
     } else if (name === 'add_character') {
       const { name: charName, description, gender } = args;
       const persona = await synthesizeCharacterPersona(charName, gender, project.globalStyle || "Cinematic", project.productionSeed);
-      const newChar: Character = {
+      let newChar: Character = {
         id: `char_${Date.now()}`,
         name: charName,
         description: persona.description || description,
@@ -384,8 +446,15 @@ const App: React.FC = () => {
         voiceId: persona.voiceId || VOICE_PRESETS[0].id,
         voiceSettings: { speed: 1, pitch: 0 }
       };
+      // Auto-synthesize CharacterDNA for Director-created characters
+      try {
+        const dna = await synthesizeCharacterDNA(newChar, project.globalStyle || 'Cinematic', project.productionSeed);
+        newChar = { ...newChar, characterDNA: dna };
+      } catch (e) {
+        console.error('[add_character] DNA synthesis failed:', e);
+      }
       setProject(p => ({ ...p, characters: [...p.characters, newChar] }));
-      return "Character added and synthesized.";
+      return "Character added and synthesized with identity lock.";
     } else if (name === 'update_character') {
       const { character_name, voiceId, description, visualPrompt, voiceSpeed, voicePitch } = args;
       setProject(p => ({
@@ -425,7 +494,7 @@ const App: React.FC = () => {
     } else if (name === 'suggest_b_roll') {
       const suggestions = await suggestBRoll(project);
       setBRollSuggestions(suggestions.map((s, i) => ({ ...s, id: Date.now() + i })));
-      setShowBRoll(true);
+      setActiveModal({ type: 'broll' });
       return "B-Roll synthesis complete. Review suggestions in the terminal.";
     }
     else if (name === 'check_workflow_progress') {
@@ -437,31 +506,107 @@ const App: React.FC = () => {
       addLog(`Director suggests ${toolId}: ${reason}`, "ai_suggestion");
       if (autoOpen) {
         // Map toolId to UI
-        if (toolId === 'script-doctor') setShowScriptDoctor(true);
-        if (toolId === 'continuity-auditor') setShowAuditor(true);
-        if (toolId === 'vfx-master') setShowMastering(true);
-        if (toolId === 'youtube-optimizer') setShowManifest(true);
+        if (toolId === 'script-doctor') setActiveModal({ type: 'script_doctor' });
+        if (toolId === 'continuity-auditor') setActiveModal({ type: 'continuity_auditor' });
+        if (toolId === 'vfx-master') setActiveModal({ type: 'vfx' });
+        if (toolId === 'youtube-optimizer') setActiveModal({ type: 'manifest' });
       }
       return "Suggestion presented to user.";
     } else if (name === 'execute_workflow_step') {
       const { stepId } = args;
       await handleExecuteWorkflowStep(stepId);
       return `Workflow step ${stepId} initiated.`;
+    } else if (name === 'assign_shot_list') {
+      await handleAssignShotList();
+      return "Shot list assigned to all scenes.";
+    } else if (name === 'run_consistency_audit') {
+      setActiveModal({ type: 'consistency_dashboard' });
+      return "Consistency Dashboard opened.";
+    } else if (name === 'reformat_script') {
+      const reformatted = await reformatScript(project.script || '', project.globalStyle || 'Cinematic', project.productionSeed);
+      setProject(p => ({ ...p, script: reformatted }));
+      addLog("Director reformatted script to production format.", "ai_suggestion");
+      return `Script reformatted. ${reformatted.split('[Scene:').length - 1} scenes detected.`;
+    } else if (name === 'optimize_character_prompt') {
+      const { character_name } = args;
+      const char = project.characters.find(c => c.name.toLowerCase() === character_name.toLowerCase());
+      if (!char) return `Character "${character_name}" not found.`;
+      const optimized = await optimizeCharacterVisualPrompt(char, project.globalStyle || 'Cinematic', project.productionSeed);
+      setProject(p => ({ ...p, characters: p.characters.map(c => c.name === char.name ? { ...c, visualPrompt: optimized } : c) }));
+      addLog(`Director optimized visual prompt for ${char.name}.`, "ai_suggestion");
+      return `Optimized prompt applied to ${char.name}.`;
+    } else if (name === 'apply_lighting_brief') {
+      const brief = await generateLightingBrief(project.script || '', project.globalStyle || 'Cinematic', project.productionSeed);
+      setProject(p => ({ ...p, lightingBrief: brief }));
+      addLog("Director applied cinematic lighting brief.", "ai_suggestion");
+      return `Lighting brief applied: ${brief.timeOfDay}, ${brief.moodDescriptor}.`;
+    } else if (name === 'run_video_consistency_audit') {
+      const { mark_for_regeneration } = args;
+      const sceneImagesForAudit = project.scenes
+        .map(s => ({ sceneId: s.id, imageBase64: project.assets[s.id]?.imageUrl || '' }))
+        .filter(s => s.imageBase64.startsWith('data:'));
+      if (sceneImagesForAudit.length === 0) return "No generated scene images found to audit.";
+      const charsWithRef = project.characters.filter(c => c.referenceImageBase64);
+      if (charsWithRef.length === 0) return "No characters with reference images found. Generate character images first.";
+      let allResults: ConsistencyAuditResult[] = [];
+      for (const char of charsWithRef) {
+        const results = await auditCharacterConsistency(char, sceneImagesForAudit);
+        allResults = [...allResults, ...results];
+      }
+      const inconsistentSceneIds = [...new Set(allResults.filter(r => r.score < 70).map(r => r.sceneId))];
+      const topIssues = allResults.filter(r => r.issues.length > 0).slice(0, 3).map(r => `Scene ${r.sceneId}: ${r.issues[0]}`).join('; ');
+      const report = `Audited ${sceneImagesForAudit.length} scenes for ${charsWithRef.length} character(s). ${inconsistentSceneIds.length} inconsistent scene(s) found.${topIssues ? ' Issues: ' + topIssues : ''}`;
+      if (mark_for_regeneration && inconsistentSceneIds.length > 0) {
+        handleMarkScenesForRegeneration(inconsistentSceneIds);
+        addLog(`Director flagged ${inconsistentSceneIds.length} inconsistent scenes for regeneration.`, "ai_suggestion");
+      }
+      return report;
     }
     return "Unknown tool.";
   };
 
+  const handleAssignShotList = async () => {
+    if (project.scenes.length === 0) return;
+    setIsAssigningShotList(true);
+    addLog("Assigning cinematic shot list to scenes...", "system");
+    try {
+      const updatedScenes = await assignShotList(project.scenes, project.script);
+      setProject(p => ({ ...p, scenes: updatedScenes }));
+      addLog("Shot list assigned. Cinematic variety optimized for 3-act structure.", "success");
+    } catch (e: any) {
+      addLog(`Shot list assignment failed: ${e.message}`, "error");
+    } finally {
+      setIsAssigningShotList(false);
+    }
+  };
+
+  const handleMarkScenesForRegeneration = (sceneIds: number[]) => {
+    setProject(p => {
+      const updatedAssets = { ...p.assets };
+      sceneIds.forEach(id => {
+        if (updatedAssets[id]) {
+          updatedAssets[id] = { ...updatedAssets[id], status: 'pending' };
+        }
+      });
+      return { ...p, assets: updatedAssets };
+    });
+    addLog(`Marked ${sceneIds.length} scene(s) for regeneration.`, "system");
+  };
+
+  const handleUpdateConsistencyScores = (scores: Record<string, ConsistencyScore>) => {
+    setProject(p => ({ ...p, consistencyScores: scores }));
+  };
+
   const handleAnalyze = async (script: string) => {
-    if (!checkPhaseGates('manifest')) return;
     if (!hasAuth) { await triggerApiKeySelection(); setHasAuth(true); return; }
     setProject(prev => ({ ...prev, status: 'analyzing', script }));
     setAutoDiagnosisTriggered(false);
     addLog("Initializing production sequence analysis...", "system");
     try {
-      const { characters, scenes, tasks, modules, metadata } = await analyzeScript(script, project.productionSeed);
+      const { characters, scenes, tasks, modules, metadata, lightingBrief } = await analyzeScript(script, project.productionSeed);
       const initialAssets: GeneratedAssets = {};
       scenes.forEach(s => initialAssets[s.id] = { status: 'pending', variants: [] });
-      setProject(prev => ({ ...prev, status: 'ready', characters, scenes, assets: initialAssets, tasks, modules }));
+      setProject(prev => ({ ...prev, status: 'ready', characters, scenes, assets: initialAssets, tasks, modules, ...(lightingBrief ? { lightingBrief } : {}) }));
       setYoutubeMetadata(metadata);
       addLog(`Analysis complete. Visual health: Calibrated.`, "success");
       setChatOpen(true);
@@ -493,7 +638,23 @@ const App: React.FC = () => {
       const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
       const styleRef = moodboardImg || keyArtImg;
 
-      const img = await generateSceneImage(scene, project.characters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
+      // Find the previous scene's completed image for temporal continuity injection
+      const sceneIndex = project.scenes.findIndex(s => s.id === sceneId);
+      const previousScene = sceneIndex > 0 ? project.scenes[sceneIndex - 1] : null;
+      const previousSceneImageUrl = previousScene ? project.assets[previousScene.id]?.imageUrl : undefined;
+
+      // Enrich the raw visual prompt to full cinematographic quality before generation
+      const sceneCharsForEnrich = project.characters.filter(c => (scene.charactersInScene || []).includes(c.name));
+      const enrichedVisualPrompt = await enrichVisualPrompt(
+        scene.visualPrompt,
+        project.globalStyle || 'Cinematic',
+        scene.shotType,
+        project.lightingBrief,
+        sceneCharsForEnrich
+      );
+      const enrichedScene = { ...scene, visualPrompt: enrichedVisualPrompt };
+
+      const { imageUrl: img, seedUsed } = await generateSceneImage(enrichedScene, project.characters, aspectRatio, resolution, feedback, project.globalStyle || 'Cinematic', project.productionSeed, styleRef, project.lightingBrief, previousSceneImageUrl);
 
       // Validate image
       const imageValidation = validateImage(img);
@@ -501,9 +662,14 @@ const App: React.FC = () => {
         throw new Error(`Image validation failed: ${imageValidation.error}`);
       }
 
-      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: 'generating_video' } } }));
+      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, seed: seedUsed, status: 'generating_video' } } }));
 
-      const video = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
+      const sceneCharsForVideo = project.characters.filter(c => (scene.charactersInScene || []).includes(c.name));
+      const charVideoDesc = sceneCharsForVideo.map(c => buildCanonicalPrompt(c) || c.visualPrompt).filter(Boolean).join('; ');
+      const videoPrompt = charVideoDesc
+        ? `${scene.visualPrompt}. Characters in frame: ${charVideoDesc}.`
+        : scene.visualPrompt;
+      const video = await generateSceneVideo(img, videoPrompt, aspectRatio, resolution, project.globalStyle, scene.cameraMotion);
 
       // Validate video
       const videoValidation = validateVideo(video);
@@ -511,12 +677,23 @@ const App: React.FC = () => {
         throw new Error(`Video validation failed: ${videoValidation.error}`);
       }
 
-      const audioResult = await generateSceneAudio(scene.narratorLines, project.characters);
+      const audioResult = await generateSceneAudio(scene.narratorLines, project.characters, scene);
 
-      // Validate audio
-      const audioValidation = validateAudio(audioResult.audioUrl);
-      if (!audioValidation.valid) {
-        throw new Error(`Audio validation failed: ${audioValidation.error}`);
+      // Validate audio only if we have data (empty URL means all lines failed)
+      if (audioResult.audioUrl) {
+        const audioValidation = validateAudio(audioResult.audioUrl);
+        if (!audioValidation.valid) {
+          throw new Error(`Audio validation failed: ${audioValidation.error}`);
+        }
+        // Lock actual audio duration from PCM bytes (24kHz, 16-bit mono = 48000 bytes/sec)
+        try {
+          const pcmBytes = atob(audioResult.audioUrl.split(',')[1]).length;
+          const actualAudioDuration = pcmBytes / (24000 * 2);
+          setProject(prev => ({
+            ...prev,
+            scenes: prev.scenes.map(s => s.id === sceneId ? { ...s, actualAudioDuration } : s)
+          }));
+        } catch { /* silently skip duration lock on decode error */ }
       }
 
       const finalVariant: AssetHistoryItem = { imageUrl: img, videoUrl: video, timestamp: Date.now() };
@@ -606,7 +783,7 @@ const App: React.FC = () => {
       const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
       const styleRef = moodboardImg || keyArtImg;
 
-      const img = await generateSceneImage(scene, project.characters, aspectRatio, resolution, undefined, project.globalStyle, project.productionSeed, styleRef);
+      const { imageUrl: img, seedUsed: _seed } = await generateSceneImage(scene, project.characters, aspectRatio, resolution, undefined, project.globalStyle || 'Cinematic', project.productionSeed, styleRef, project.lightingBrief);
 
       // Validate image
       const imageValidation = validateImage(img);
@@ -715,12 +892,23 @@ const App: React.FC = () => {
     }));
 
     try {
-      const audioResult = await generateSceneAudio(scene.narratorLines, project.characters);
+      const audioResult = await generateSceneAudio(scene.narratorLines, project.characters, scene);
 
-      // Validate audio
-      const audioValidation = validateAudio(audioResult.audioUrl);
-      if (!audioValidation.valid) {
-        throw new Error(`Audio validation failed: ${audioValidation.error}`);
+      // Validate audio only if we have data (empty URL means all lines failed)
+      if (audioResult.audioUrl) {
+        const audioValidation = validateAudio(audioResult.audioUrl);
+        if (!audioValidation.valid) {
+          throw new Error(`Audio validation failed: ${audioValidation.error}`);
+        }
+        // Lock actual audio duration
+        try {
+          const pcmBytes = atob(audioResult.audioUrl.split(',')[1]).length;
+          const actualAudioDuration = pcmBytes / (24000 * 2);
+          setProject(prev => ({
+            ...prev,
+            scenes: prev.scenes.map(s => s.id === sceneId ? { ...s, actualAudioDuration } : s)
+          }));
+        } catch { /* silently skip */ }
       }
 
       const hasAudioErrors = audioResult.hasErrors;
@@ -764,17 +952,30 @@ const App: React.FC = () => {
   };
 
   const handleCharacterSave = async (char: Character) => {
+    let savedChar = char;
+
+    // Auto-synthesize CharacterDNA when a reference image is approved for the first time
+    if (char.referenceImageApproved && char.referenceImageBase64 && !char.characterDNA) {
+      try {
+        addLog(`Synthesizing identity lock for "${char.name}"...`, "system");
+        const dna = await synthesizeCharacterDNA(char, project.globalStyle || 'Cinematic', project.productionSeed);
+        savedChar = { ...char, characterDNA: dna };
+        addLog(`Character DNA locked for "${char.name}". Maximum cross-scene consistency active.`, "success");
+      } catch (e) {
+        console.error('[handleCharacterSave] DNA synthesis failed:', e);
+        // Non-blocking — save character without DNA if synthesis fails
+      }
+    }
+
     // Check if this is a new character (not in project yet)
-    const isNew = !project.characters.find(c => c.id === char.id);
+    const isNew = !project.characters.find(c => c.id === savedChar.id);
 
     if (isNew) {
-      // Add new character to project
-      setProject(p => ({ ...p, characters: [...p.characters, char] }));
-      addLog(`New character "${char.name}" added to cast.`, "success");
+      setProject(p => ({ ...p, characters: [...p.characters, savedChar] }));
+      addLog(`New character "${savedChar.name}" added to cast.`, "success");
     } else {
-      // Update existing character
-      setProject(p => ({ ...p, characters: p.characters.map(c => c.id === char.id ? char : c) }));
-      addLog(`Character profile "${char.name}" updated.`, "system");
+      setProject(p => ({ ...p, characters: p.characters.map(c => c.id === savedChar.id ? savedChar : c) }));
+      addLog(`Character profile "${savedChar.name}" updated.`, "system");
     }
 
     setEditingCharacter(null);
@@ -806,8 +1007,12 @@ const App: React.FC = () => {
     setIsBatchProcessing(true);
     addLog(resumeQueue ? "Resuming batch generation..." : "Batch Manifesting Sequence Initialized...", "system");
 
-    const RATE_LIMIT_DELAY = 3000; // 3s between scenes to avoid API quota issues
+    const RATE_LIMIT_DELAY = 8000; // 8s between scenes — gives quota room across 50+ scene batches
+    const FAILURE_COOLDOWN = 45000; // 45s cooldown after a failed scene to recover from quota exhaustion
     const MAX_RETRIES = 2;
+
+    // Snapshot scenes at batch-start so the loop is immune to re-renders/stale closure
+    const scenesSnapshot = project.scenes.slice();
 
     // Initialize or resume queue
     let queue: BatchQueue;
@@ -830,7 +1035,7 @@ const App: React.FC = () => {
     let cancelledAt = -1;
 
     try {
-      for (let i = 0; i < project.scenes.length; i++) {
+      for (let i = 0; i < scenesSnapshot.length; i++) {
         // Check for cancellation
         if (batchCancellationRef.current) {
           cancelledAt = i;
@@ -838,7 +1043,7 @@ const App: React.FC = () => {
           break;
         }
 
-        const scene = project.scenes[i];
+        const scene = scenesSnapshot[i];
 
         // Skip if not in pending queue (already completed or failed in previous session)
         if (!queue.pending.includes(scene.id)) {
@@ -846,16 +1051,15 @@ const App: React.FC = () => {
           continue;
         }
 
-        // Check if scene is already complete using functional state update
+        // Check if scene is already complete
         const assetStatus = await new Promise<string>((resolve) => {
           setProject(prev => {
             resolve(prev.assets[scene.id]?.status || 'pending');
-            return prev; // No state change, just reading
+            return prev;
           });
         });
 
         if (assetStatus === 'complete') {
-          // Update queue
           queue.pending = queue.pending.filter(id => id !== scene.id);
           queue.completed.push(scene.id);
           saveBatchQueue(queue);
@@ -863,8 +1067,8 @@ const App: React.FC = () => {
           continue;
         }
 
-        setCurrentTaskLabel(`Manifesting Sequence #${i + 1} of ${project.scenes.length}: ${scene.description.substring(0, 30)}...`);
-        addLog(`Generating Scene #${i + 1}...`, "system");
+        setCurrentTaskLabel(`Manifesting Sequence #${i + 1} of ${scenesSnapshot.length}: ${scene.description.substring(0, 30)}...`);
+        addLog(`Generating Scene #${i + 1} of ${scenesSnapshot.length}...`, "system");
 
         let success = false;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -875,8 +1079,9 @@ const App: React.FC = () => {
           }
 
           if (attempt > 0) {
-            addLog(`Retrying Scene #${i + 1} (attempt ${attempt + 1}/${MAX_RETRIES + 1})...`, "system");
-            await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY * 2)); // longer delay before retry
+            const retryDelay = RATE_LIMIT_DELAY * 3 * attempt; // 24s, 48s progressive retry wait
+            addLog(`Retrying Scene #${i + 1} (attempt ${attempt + 1}/${MAX_RETRIES + 1}) — waiting ${retryDelay / 1000}s...`, "system");
+            await new Promise(r => setTimeout(r, retryDelay));
           }
 
           try {
@@ -893,14 +1098,12 @@ const App: React.FC = () => {
             if (finalStatus === 'complete') {
               success = true;
               addLog(`Scene #${i + 1} generated successfully`, "success");
-              // Update queue
               queue.pending = queue.pending.filter(id => id !== scene.id);
               queue.completed.push(scene.id);
               saveBatchQueue(queue);
               break;
             } else if (finalStatus === 'error') {
-              addLog(`Scene #${i + 1} generation failed with error`, "error");
-              // Don't break, allow retries
+              addLog(`Scene #${i + 1} generation failed on attempt ${attempt + 1}`, "error");
             }
           } catch (error) {
             console.error(`Scene ${i + 1} generation error:`, error);
@@ -909,14 +1112,18 @@ const App: React.FC = () => {
 
         if (!success && !batchCancellationRef.current) {
           failedScenes.push(i + 1);
-          // Update queue with failed scene
           queue.pending = queue.pending.filter(id => id !== scene.id);
           queue.failed.push(scene.id);
           saveBatchQueue(queue);
+          // Cooldown after failure — lets quota recover before attacking the next scene
+          if (i < scenesSnapshot.length - 1) {
+            addLog(`Scene #${i + 1} failed after all retries. Cooling down ${FAILURE_COOLDOWN / 1000}s before next scene...`, "system");
+            await new Promise(r => setTimeout(r, FAILURE_COOLDOWN));
+          }
         }
 
-        // Rate-limit delay between scenes (skip if cancelled or last scene)
-        if (i < project.scenes.length - 1 && !batchCancellationRef.current) {
+        // Standard rate-limit delay between scenes
+        if (success && i < scenesSnapshot.length - 1 && !batchCancellationRef.current) {
           await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY));
         }
       }
@@ -984,21 +1191,20 @@ const App: React.FC = () => {
         await handleManifestAll();
         break;
       case 'set_key_art':
-        setShowAssetLibrary(true);
+        setActiveModal({ type: 'asset_library' });
         break;
       case 'run_script_doctor':
-        setShowScriptDoctor(true);
+        setActiveModal({ type: 'script_doctor' });
         break;
       case 'run_continuity_audit':
-        setShowAuditor(true);
+        setActiveModal({ type: 'continuity_auditor' });
         break;
       case 'run_viral_analysis':
       case 'generate_seo_metadata':
-        setShowManifest(true);
-        // Ideally scroll to optimizer section
+        setActiveModal({ type: 'manifest' });
         break;
       case 'apply_vfx_mastering':
-        setShowMastering(true);
+        setActiveModal({ type: 'vfx' });
         break;
       case 'add_moodboard':
         // Scroll to moodboard
@@ -1029,17 +1235,17 @@ const App: React.FC = () => {
           await handleManifestAll();
           break;
         case 'run_continuity_audit':
-          setShowAuditor(true);
+          setActiveModal({ type: 'continuity_auditor' });
           break;
         case 'set_key_art':
-          setShowAssetLibrary(true);
+          setActiveModal({ type: 'asset_library' });
           break;
         case 'apply_vfx_mastering':
-          setShowMastering(true);
+          setActiveModal({ type: 'vfx' });
           break;
         case 'analyze_viral_potential':
         case 'generate_seo_metadata':
-          setShowManifest(true);
+          setActiveModal({ type: 'manifest' });
           break;
         case 'open_director_chat':
           setChatOpen(true);
@@ -1066,7 +1272,7 @@ const App: React.FC = () => {
       scenes: [...p.scenes, ...newScenes],
       assets: initializedAssets
     }));
-    setShowBRoll(false);
+    closeModal();
     addLog(`${newScenes.length} B-Roll scenes injected.`, "success");
   };
 
@@ -1116,15 +1322,51 @@ const App: React.FC = () => {
   };
 
   const handleNavigatePhase = (section: string) => {
-    // Scroll to the relevant section on the dashboard
-    const sectionMap: Record<string, string> = {
-      genesis: 'genesis-section',
-      manifest: 'manifest-section',
-      synthesis: 'synthesis-section',
-      post: 'post-section'
-    };
-    const el = document.getElementById(sectionMap[section] || '');
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setSelectedStudioPhase(section as ProductionPhase);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSelectPhase = (phase: ProductionPhase) => {
+    const phaseOrder: ProductionPhase[] = ['genesis', 'manifest', 'synthesis', 'post'];
+    const selectedIdx = phaseOrder.indexOf(selectedStudioPhase);
+    const targetIdx = phaseOrder.indexOf(phase);
+    if (directorMode === 'guided' && targetIdx > selectedIdx) {
+      if (!checkPhaseGates(phase)) return;
+    }
+    setSelectedStudioPhase(phase);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleAdvancePhase = (nextPhase: ProductionPhase) => {
+    if (!checkPhaseGates(nextPhase)) return;
+    setSelectedStudioPhase(nextPhase);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // ── Derived values used in render ───────────────────────────────────────
+  const batchCompletedCount = project.scenes.filter(s => project.assets[s.id]?.status === 'complete').length;
+  const assetErrorCount = project.scenes.filter(s => project.assets[s.id]?.status === 'error').length;
+
+  const genesisCTAItems: CTACheckItem[] = [
+    { label: 'Script entered', done: !!project.script && project.script.trim().length > 50 },
+    { label: 'Script analyzed', done: project.scenes.length > 0 },
+    { label: 'Visual style selected', done: !!project.globalStyle, warning: true },
+  ];
+
+  const manifestCTAItems: CTACheckItem[] = [
+    { label: `${project.characters.length} character${project.characters.length !== 1 ? 's' : ''} in cast`, done: project.characters.length > 0 },
+    { label: 'All voices assigned', done: project.characters.length > 0 && project.characters.every(c => c.voiceId) },
+    { label: 'DNA locked for all characters', done: project.characters.length > 0 && project.characters.every(c => c.characterDNA), warning: true },
+  ];
+
+  const synthesisCTAItems: CTACheckItem[] = [
+    { label: `${batchCompletedCount} of ${project.scenes.length} scenes generated`, done: batchCompletedCount === project.scenes.length && project.scenes.length > 0 },
+    { label: 'No asset errors', done: assetErrorCount === 0 },
+    { label: 'Continuity audited', done: !!project.consistencyScores && Object.keys(project.consistencyScores).length > 0, warning: true },
+  ];
+
+  const phaseColors: Record<ProductionPhase, string> = {
+    genesis: '#8b5cf6', manifest: '#3b82f6', synthesis: '#00d4ff', post: '#f59e0b',
   };
 
   return (
@@ -1135,65 +1377,76 @@ const App: React.FC = () => {
       assistantActive={chatOpen}
       onToggleAssistant={() => setChatOpen(!chatOpen)}
     >
-      <div className={`relative min-h-screen transition-all duration-500 ease-in-out pb-32 ${chatOpen ? 'xl:pr-[25%]' : ''}`}>
+      {/* Main content — right-padded to accommodate the persistent Director sidebar */}
+      <Suspense fallback={
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="flex flex-col items-center gap-3">
+            <i className="fa-solid fa-spinner fa-spin text-2xl" style={{ color: '#00d4ff' }}></i>
+            <span className="text-[9px] font-black uppercase tracking-[0.3em] text-mystic-gray">Loading</span>
+          </div>
+        </div>
+      }>
+      <div
+        className="relative min-h-screen pb-32 transition-all duration-300 ease-in-out"
+        style={{ paddingRight: chatOpen ? '420px' : '52px' }}
+      >
         {view === 'landing' && <LandingPage onStart={() => setView('dashboard')} />}
         {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { setProject(p); setView('dashboard'); }} onDelete={idx => setArchives(prev => prev.filter((_, i) => i !== idx))} onImport={() => fileInputRef.current?.click()} />}
 
-        <input type="file" ref={fileInputRef} className="hidden" accept=".json" />
+        <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            try {
+              const imported = JSON.parse(evt.target?.result as string);
+              if (imported && imported.script !== undefined) {
+                setProject(imported);
+                setView('dashboard');
+                addLog('Project imported successfully.', 'success');
+              } else {
+                addLog('Import failed: invalid project file format.', 'error');
+              }
+            } catch {
+              addLog('Import failed: could not parse JSON file.', 'error');
+            }
+            e.target.value = '';
+          };
+          reader.readAsText(file);
+        }} />
 
         {view === 'dashboard' && (
-          <div className="flex flex-col gap-10 pt-8 relative max-w-[1400px] mx-auto animate-in fade-in duration-700 px-4 sm:px-0">
+          <div className="flex flex-col gap-6 pt-6 relative max-w-[1400px] mx-auto animate-in fade-in duration-700 px-4 sm:px-0">
 
-            {/* STAGE TRACKER & MASTER CONTROL */}
-            <section className="nm-panel p-1 rounded-[2.5rem] bg-gradient-to-br from-white/5 to-transparent border border-white/5">
-              <div className="p-8 flex flex-col lg:flex-row justify-between items-center gap-8">
-                <div className="flex items-center gap-6">
-                  <div className="w-16 h-16 rounded-3xl nm-button flex items-center justify-center text-luna-gold shadow-2xl relative">
-                    <i className="fa-solid fa-tower-broadcast text-2xl animate-pulse"></i>
-                    <div className="absolute -top-1 -right-1 w-4 h-4 bg-deep-sage rounded-full border-4 border-eclipse-black"></div>
-                  </div>
-                  <div>
-                    <h2 className="text-2xl font-black text-white uppercase tracking-tighter font-mono italic">Production Control</h2>
-                    <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.4em] mt-1">Uplink: Core Intelligence Alpha</p>
-                  </div>
-                </div>
+            {/* ── PRODUCTION RAIL — persistent phase navigator ── */}
+            <ProductionRail
+              activePhase={activePhase}
+              selectedPhase={selectedStudioPhase}
+              onSelectPhase={handleSelectPhase}
+              project={project}
+              isBatchProcessing={isBatchProcessing}
+              batchProgress={{ completed: batchCompletedCount, total: project.scenes.length }}
+              errorCount={assetErrorCount}
+              directorOpen={chatOpen}
+              onToggleDirector={() => setChatOpen(!chatOpen)}
+              directorMode={directorMode}
+              onToggleMode={() => setDirectorMode(m => m === 'guided' ? 'expert' : 'guided')}
+            />
 
-                <div className="flex bg-eclipse-black/40 p-1.5 rounded-2xl nm-inset-input border border-white/5 overflow-x-auto max-w-full scrollbar-hide">
-                  {[
-                    { id: 'genesis', label: '01 Genesis', icon: 'fa-seedling' },
-                    { id: 'manifest', label: '02 Manifest', icon: 'fa-file-invoice' },
-                    { id: 'synthesis', label: '03 Synthesis', icon: 'fa-wand-magic-sparkles' },
-                    { id: 'post', label: '04 Post', icon: 'fa-clapperboard' }
-                  ].map((phase) => (
-                    <div key={phase.id} className={`px-6 py-3 rounded-xl flex items-center gap-3 transition-all shrink-0 ${activePhase === phase.id ? 'nm-button-gold text-white shadow-nm-gold scale-105 z-10' : 'text-mystic-gray opacity-40'}`}>
-                      <i className={`fa-solid ${phase.icon} text-xs`}></i>
-                      <span className="text-[10px] font-black uppercase tracking-widest">{phase.label}</span>
-                    </div>
-                  ))}
-                </div>
+            {/* ── PHASE WORKSPACES — tab-switched, no more long scroll ── */}
+            <div className="animate-in fade-in duration-300" key={selectedStudioPhase}>
 
-                <div className="flex gap-4">
-                  <div className="text-right">
-                    <p className="text-[8px] text-mystic-gray uppercase font-black tracking-widest mb-1">Neural Health</p>
-                    <div className="flex gap-1">
-                      {[...Array(5)].map((_, i) => <div key={i} className={`w-4 h-1 rounded-full ${i < 4 ? 'bg-luna-gold shadow-[0_0_5px_#3b82f6]' : 'bg-white/10'}`}></div>)}
-                    </div>
-                  </div>
-                  <div className="w-px h-10 bg-white/5 mx-2"></div>
-                  <button onClick={() => setShowDeck(true)} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg">
-                    <i className="fa-solid fa-chart-line"></i>
-                  </button>
-                </div>
-              </div>
-            </section>
-
-            {/* PRODUCTION HEALTH SUMMARY */}
-            {project.scenes.length > 0 && <ProductionStageOverview project={project} />}
-
-            {/* STAGE 1: GENESIS (Script & Reference) */}
-            <div id="genesis-section" className={`grid grid-cols-1 xl:grid-cols-12 gap-10 transition-all duration-700 ${activePhase !== 'genesis' ? 'opacity-50 hover:opacity-100 blur-[1px] hover:blur-0' : ''}`}>
+            {/* ════════════════════ GENESIS ════════════════════ */}
+            {selectedStudioPhase === 'genesis' && (
+            <div className="space-y-8">
+            <div className={`grid grid-cols-1 xl:grid-cols-12 gap-10`}>
               <div className="xl:col-span-8">
-                <ScriptInput onAnalyze={handleAnalyze} isAnalyzing={project.status === 'analyzing'} />
+                <ScriptInput
+                  script={project.script || ''}
+                  onScriptChange={(s) => setProject(p => ({ ...p, script: s }))}
+                  onAnalyze={handleAnalyze}
+                  isAnalyzing={project.status === 'analyzing'}
+                />
               </div>
               <div className="xl:col-span-4 flex flex-col gap-6">
                 <Moodboard
@@ -1218,14 +1471,41 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
-            </div>
+            </div>{/* end genesis grid */}
 
-            {/* STAGE 2: MANIFEST (Cast & Timeline) */}
-            {project.scenes.length > 0 && (
-              <div id="manifest-section" className="space-y-10 animate-in slide-in-from-bottom-10 duration-1000">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
-                  <div className="lg:col-span-4 flex flex-col gap-6">
-                    <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={handleAddCharacter} onAudit={() => setShowAuditor(true)} />
+            {/* Genesis → Manifest CTA */}
+            <PhaseCTA
+              currentPhase="genesis"
+              nextPhase="manifest"
+              nextPhaseLabel="Manifest Cast"
+              items={genesisCTAItems}
+              onNext={() => handleAdvancePhase('manifest')}
+              onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('What do I need to finish in Genesis before I can move to Manifest?'); }}
+              canAdvance={project.scenes.length > 0}
+            />
+            </div>
+            )}{/* end selectedStudioPhase === genesis */}
+
+            {/* ════════════════════ MANIFEST ════════════════════ */}
+            {selectedStudioPhase === 'manifest' && (
+            <div className="space-y-8">
+            {project.scenes.length === 0 ? (
+              <div className="nm-panel p-16 rounded-3xl border border-white/5 flex flex-col items-center text-center gap-6">
+                <i className="fa-solid fa-seedling text-4xl text-mystic-gray opacity-40"></i>
+                <div>
+                  <h3 className="text-xl font-black text-white uppercase tracking-tight font-mono">Script Not Analyzed</h3>
+                  <p className="text-sm text-celestial-stone mt-2">Analyze your script in the Genesis phase first to extract scenes and characters.</p>
+                </div>
+                <button onClick={() => setSelectedStudioPhase('genesis')} className="px-8 py-3 nm-button-gold text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-all">
+                  ← Back to Genesis
+                </button>
+              </div>
+            ) : (
+            <>
+            <ProductionStageOverview project={project} />
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+              <div className="lg:col-span-4 flex flex-col gap-6">
+                <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={handleAddCharacter} onAudit={() => setActiveModal({ type: 'continuity_auditor' })} />
                     <div className="nm-panel p-8 border border-white/5 bg-black/40">
                       <h4 className="text-[10px] font-black text-white uppercase tracking-widest mb-6 flex items-center gap-3">
                         <i className="fa-solid fa-stethoscope text-luna-gold"></i> Directorial Audit
@@ -1240,11 +1520,28 @@ const App: React.FC = () => {
                           <i className="fa-solid fa-chevron-right text-[10px] text-luna-gold transition-transform group-hover:translate-x-1"></i>
                         </button>
                         <button
-                          onClick={() => setShowScriptDoctor(true)}
+                          onClick={() => setActiveModal({ type: 'script_doctor' })}
                           className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-solar-amber/30 transition-all border border-white/5"
                         >
                           <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Narrative Diagnostic</span>
                           <i className="fa-solid fa-chevron-right text-[10px] text-solar-amber transition-transform group-hover:translate-x-1"></i>
+                        </button>
+                        <button
+                          onClick={() => setActiveModal({ type: 'consistency_dashboard' })}
+                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-deep-sage/30 transition-all border border-white/5"
+                        >
+                          <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Consistency Dashboard</span>
+                          <i className="fa-solid fa-chevron-right text-[10px] text-deep-sage transition-transform group-hover:translate-x-1"></i>
+                        </button>
+                        <button
+                          onClick={handleAssignShotList}
+                          disabled={isAssigningShotList || project.scenes.length === 0}
+                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-luna-gold/30 transition-all border border-white/5 disabled:opacity-40"
+                        >
+                          <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">
+                            {isAssigningShotList ? 'Assigning Shots...' : 'Assign Shot List'}
+                          </span>
+                          <i className={`fa-solid ${isAssigningShotList ? 'fa-spinner fa-spin' : 'fa-camera-movie'} text-[10px] text-luna-gold`}></i>
                         </button>
                       </div>
                     </div>
@@ -1253,24 +1550,41 @@ const App: React.FC = () => {
                     <ProductionTimeline scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} />
 
                     <div className="flex flex-wrap sm:flex-nowrap gap-4">
-                      <button onClick={() => setShowStoryboard(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
+                      <button onClick={() => setActiveModal({ type: 'storyboard' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
                         <i className="fa-solid fa-grip text-luna-gold text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Storyboard View</span>
                       </button>
-                      <button onClick={() => setShowAssetLibrary(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
+                      <button onClick={() => setActiveModal({ type: 'asset_library' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
                         <i className="fa-solid fa-photo-film text-solar-amber text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Asset Registry</span>
                       </button>
-                      <button onClick={() => setShowManifest(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
+                      <button onClick={() => setActiveModal({ type: 'manifest' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
                         <i className="fa-solid fa-file-invoice text-deep-sage text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Production Protocol</span>
                       </button>
                     </div>
                   </div>
-                </div>
+                </div>{/* end manifest grid */}
 
-                {/* STAGE 3: SYNTHESIS (Scene Grid) */}
-                <section id="synthesis-section" className="space-y-10">
+              {/* Manifest → Synthesis CTA */}
+              <PhaseCTA
+                currentPhase="manifest"
+                nextPhase="synthesis"
+                nextPhaseLabel="Synthesis"
+                items={manifestCTAItems}
+                onNext={() => handleAdvancePhase('synthesis')}
+                onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('What do I need to finish in Manifest before moving to Synthesis?'); }}
+                canAdvance={project.characters.length > 0 && project.characters.every(c => c.voiceId)}
+              />
+            </>
+            )}{/* end scenes.length > 0 */}
+            </div>
+            )}{/* end selectedStudioPhase === manifest */}
+
+            {/* ════════════════════ SYNTHESIS ════════════════════ */}
+            {selectedStudioPhase === 'synthesis' && (
+            <div className="space-y-8">
+            <section className="space-y-10">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
                     <div>
                       <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Neural Synthesis Lab</h3>
@@ -1286,7 +1600,7 @@ const App: React.FC = () => {
                           <i className="fa-solid fa-stop"></i> Cancel Batch
                         </button>
                       )}
-                      <button onClick={() => setShowMixer(true)} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
+                      <button onClick={() => setActiveModal({ type: 'audio_mixer' })} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
                         <i className="fa-solid fa-sliders"></i>
                       </button>
                     </div>
@@ -1306,11 +1620,11 @@ const App: React.FC = () => {
                             onUpdate={(id, s) => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === id ? s : sc) }))}
                             onMove={(dir) => handleMoveScene(scene.id, dir)}
                             onDelete={(id) => setProject(p => ({ ...p, scenes: p.scenes.filter(s => s.id !== id) }))}
-                            onDuplicate={() => setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: Date.now() }] }))}
+                            onDuplicate={() => { const newId = Date.now(); setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: newId }], assets: { ...p.assets, [newId]: { status: 'pending', variants: [] } } })); }}
                             onInspect={setInspectingScene}
                             onSelectVariant={handleSelectVariant}
                             onClearAsset={handleClearAsset}
-                            isProcessing={project.assets[scene.id]?.status.startsWith('generating')} globalStyle={project.globalStyle}
+                            isProcessing={project.assets[scene.id]?.status?.startsWith('generating') ?? false} globalStyle={project.globalStyle}
                           />
                           {project.assets[scene.id]?.imageUrl && (
                             <button
@@ -1325,160 +1639,280 @@ const App: React.FC = () => {
                       </ErrorBoundary>
                     ))}
                   </div>
-                </section>
+                </section>{/* end synthesis scene grid */}
 
-                {/* STAGE 4: POST-PRODUCTION (Mastering & Distribution) */}
-                <section id="post-section" className="space-y-10 py-10">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
-                    <div>
-                      <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Post-Production & Release</h3>
-                      <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Neural mastering and distribution multipliers</p>
-                    </div>
-                    <button onClick={() => setShowMastering(true)} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
-                      <i className="fa-solid fa-wand-magic-sparkles"></i> Open VFX Synthesis Lab
-                    </button>
-                  </div>
+              {/* Synthesis → Post CTA */}
+              <PhaseCTA
+                currentPhase="synthesis"
+                nextPhase="post"
+                nextPhaseLabel="Post-Production"
+                items={synthesisCTAItems}
+                onNext={() => handleAdvancePhase('post')}
+                onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('My synthesis phase status: what needs attention before post-production?'); }}
+                canAdvance={batchCompletedCount > 0}
+              />
+            </div>
+            )}{/* end selectedStudioPhase === synthesis */}
 
-                  {youtubeMetadata && (
-                    <YouTubeOptimizer
-                      metadata={youtubeMetadata}
-                      script={project.script}
-                      characters={project.characters}
-                      globalStyle={project.globalStyle || "Cinematic"}
-                      viralData={project.viralData}
-                      onUpdateViral={(data) => setProject(p => ({ ...p, viralData: data }))}
-                    />
-                  )}
-
-                  <div className="flex justify-center pt-20">
-                    <div className="w-full max-w-4xl nm-panel p-10 sm:p-16 rounded-[4rem] border border-white/5 relative overflow-hidden bg-gradient-to-t from-luna-gold/5 to-transparent flex flex-col items-center text-center shadow-2xl">
-                      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-16 bg-gradient-to-b from-luna-gold to-transparent opacity-40"></div>
-                      <h4 className="text-2xl font-black text-white uppercase tracking-widest font-mono italic mb-6">Master Production Unit</h4>
-                      <p className="text-sm text-celestial-stone max-w-lg mb-12 font-light">The neural tracks are ready for final merge. Initializing the export will compile all visual takes, audio signals, and VFX mastering into a single master distribution unit.</p>
-
-                      <div className="flex flex-col sm:flex-row gap-6 w-full sm:w-auto">
-                        <button
-                          onClick={() => setShowPlayer(true)}
-                          className="px-12 py-5 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] hover:bg-white/5 transition-all flex items-center justify-center gap-4 border border-white/10"
-                        >
-                          <i className="fa-solid fa-desktop"></i> Pre-Production Review
-                        </button>
-                        <button
-                          onClick={() => setShowRenderer(true)}
-                          disabled={!isAllComplete}
-                          className="px-16 py-5 bg-gold-gradient text-white rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-30 disabled:hover:scale-100"
-                        >
-                          <i className="fa-solid fa-clapperboard"></i> Initialize Master Export
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </section>
+            {/* ════════════════════ POST ════════════════════ */}
+            {selectedStudioPhase === 'post' && (
+            <div className="space-y-8">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
+              <div>
+                <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Post-Production & Release</h3>
+                <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Neural mastering and distribution multipliers</p>
               </div>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setActiveModal({ type: 'directorial_deck' })} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg" title="Directorial Deck">
+                  <i className="fa-solid fa-chart-line"></i>
+                </button>
+                <button onClick={() => setActiveModal({ type: 'vfx' })} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
+                  <i className="fa-solid fa-wand-magic-sparkles"></i> VFX Synthesis Lab
+                </button>
+                <button onClick={() => setActiveModal({ type: 'audio_mixer' })} className="px-8 py-3 nm-button text-solar-amber border border-solar-amber/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-solar-amber hover:text-white transition-all flex items-center gap-3">
+                  <i className="fa-solid fa-sliders"></i> Audio Mix
+                </button>
+              </div>
+            </div>
+
+            {youtubeMetadata && (
+              <YouTubeOptimizer
+                metadata={youtubeMetadata}
+                script={project.script}
+                characters={project.characters}
+                globalStyle={project.globalStyle || "Cinematic"}
+                viralData={project.viralData}
+                onUpdateViral={(data) => setProject(p => ({ ...p, viralData: data }))}
+              />
             )}
+
+            <div className="flex justify-center pt-10">
+              <div className="w-full max-w-4xl nm-panel p-10 sm:p-16 rounded-[4rem] border border-white/5 relative overflow-hidden bg-gradient-to-t from-luna-gold/5 to-transparent flex flex-col items-center text-center shadow-2xl">
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-16 bg-gradient-to-b from-luna-gold to-transparent opacity-40"></div>
+                <h4 className="text-2xl font-black text-white uppercase tracking-widest font-mono italic mb-6">Master Production Unit</h4>
+                <p className="text-sm text-celestial-stone max-w-lg mb-12 font-light">The neural tracks are ready for final merge. Initializing the export will compile all visual takes, audio signals, and VFX mastering into a single master distribution unit.</p>
+                <div className="flex flex-col sm:flex-row gap-6 w-full sm:w-auto">
+                  <button
+                    onClick={() => setActiveModal({ type: 'player' })}
+                    className="px-12 py-5 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] hover:bg-white/5 transition-all flex items-center justify-center gap-4 border border-white/10"
+                  >
+                    <i className="fa-solid fa-desktop"></i> Pre-Production Review
+                  </button>
+                  <button
+                    onClick={() => setActiveModal({ type: 'renderer' })}
+                    disabled={!isAllComplete}
+                    className="px-16 py-5 bg-gold-gradient text-white rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-30 disabled:hover:scale-100"
+                  >
+                    <i className="fa-solid fa-clapperboard"></i> Initialize Master Export
+                  </button>
+                </div>
+              </div>
+            </div>
+            </div>
+            )}{/* end selectedStudioPhase === post */}
+
+            </div>
+          </div>
+        )}{/* end view === dashboard */}
+      </div>{/* end main content */}
+
+      {/* ── PERSISTENT DIRECTOR SIDEBAR ─────────────────────────────────── */}
+      <aside
+        className="fixed right-0 top-0 bottom-0 z-[150] flex flex-col pt-20 pb-0 transition-all duration-300 ease-in-out"
+        style={{
+          width: chatOpen ? '420px' : '52px',
+          background: '#0a0e1a',
+          borderLeft: chatOpen ? '1px solid rgba(0,212,255,0.12)' : '1px solid rgba(255,255,255,0.04)',
+          boxShadow: chatOpen ? '-4px 0 40px rgba(0,0,0,0.6)' : 'none',
+        }}
+      >
+        {/* Collapsed strip */}
+        {!chatOpen && (
+          <div className="flex flex-col items-center gap-4 pt-4 h-full overflow-hidden">
+            <button
+              onClick={() => setChatOpen(true)}
+              className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110"
+              style={{ background: 'rgba(0,212,255,0.08)', border: '1px solid rgba(0,212,255,0.2)' }}
+              title="Open Director"
+            >
+              <i className="fa-solid fa-brain text-[12px]" style={{ color: '#00d4ff' }}></i>
+            </button>
+            <div
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ background: phaseColors[activePhase], boxShadow: `0 0 6px ${phaseColors[activePhase]}` }}
+              title={`Phase: ${activePhase}`}
+            ></div>
+            <div
+              className="mt-auto mb-6 text-[7px] font-black uppercase tracking-[0.3em] opacity-30 flex-shrink-0"
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: '#a1a1aa' }}
+            >Director</div>
           </div>
         )}
-      </div>
 
-      {/* OVERRIDEBOT SIDEBAR */}
-      <aside
-        className={`
-          fixed right-0 top-0 bottom-0 z-[150] w-full md:w-[450px] xl:w-[25%] bg-eclipse-black shadow-2xl transition-all duration-500 ease-in-out transform border-l border-white/5
-          ${chatOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0 pointer-events-none'}
-          flex flex-col pt-24 pb-8 px-6 space-y-8
-        `}
-      >
-        <div className="flex-1 min-h-0">
-          <ErrorBoundary>
-            <DirectorAssistant
-              project={project}
-              onUpdateProject={(updates) => setProject(prev => ({ ...prev, ...updates }))}
-              onExecuteTool={handleToolExecution}
-              autoTriggerDiagnosis={autoDiagnosisTriggered}
-              currentPhase={activePhase}
-              onExecuteWorkflowStep={handleExecuteWorkflowStep}
-              onSkipWorkflowStep={handleSkipWorkflowStep}
-              onOpenTool={(toolId) => {
-                switch (toolId) {
-                  case 'script-doctor': setShowScriptDoctor(true); break;
-                  case 'continuity-auditor': setShowAuditor(true); break;
-                  case 'vfx-master': setShowMastering(true); break;
-                  case 'audio-mixer': setShowMixer(true); break;
-                  case 'youtube-optimizer': setShowManifest(true); break;
-                  case 'moodboard': /* Add logic if needed */ break;
-                }
-              }}
-            />
+        {/* Expanded panel */}
+        {chatOpen && (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <ErrorBoundary>
+              <DirectorAssistant
+                project={project}
+                onUpdateProject={(updates) => setProject(prev => ({ ...prev, ...updates }))}
+                onExecuteTool={handleToolExecution}
+                autoTriggerDiagnosis={autoDiagnosisTriggered}
+                currentPhase={activePhase}
+                onExecuteWorkflowStep={handleExecuteWorkflowStep}
+                onSkipWorkflowStep={handleSkipWorkflowStep}
+                pendingInjection={directorInjection}
+                onClearInjection={() => setDirectorInjection(null)}
+                onOpenTool={(toolId) => {
+                  switch (toolId) {
+                    case 'script-doctor': setActiveModal({ type: 'script_doctor' }); break;
+                    case 'continuity-auditor': setActiveModal({ type: 'continuity_auditor' }); break;
+                    case 'vfx-master': setActiveModal({ type: 'vfx' }); break;
+                    case 'audio-mixer': setActiveModal({ type: 'audio_mixer' }); break;
+                    case 'youtube-optimizer': setActiveModal({ type: 'manifest' }); break;
+                    case 'moodboard': setSelectedStudioPhase('genesis'); break;
+                  }
+                }}
+              />
+            </ErrorBoundary>
 
-            {/* Workflow Overlays */}
-            <QualityGateModal
-              visible={qualityGateModal.visible}
-              gates={qualityGateModal.gates}
-              targetPhase={qualityGateModal.targetPhase || 'post'} // Fallback or handle null
-              onClose={() => setQualityGateModal(prev => ({ ...prev, visible: false }))}
-              onProceed={() => {
-                setQualityGateModal(prev => ({ ...prev, visible: false }));
-                if (qualityGateModal.targetPhase) {
-                  handleNavigatePhase(qualityGateModal.targetPhase);
-                }
-              }}
-              onFixGate={async (gateOrId) => {
-                // Handle auto-fix
-                const gateId = typeof gateOrId === 'string' ? gateOrId : (gateOrId as any).id;
-                // Implement logic
-              }}
-              onOverride={() => {
-                // Allow transition
-                if (qualityGateModal.targetPhase) {
-                  handleNavigatePhase(qualityGateModal.targetPhase);
-                  setQualityGateModal(prev => ({ ...prev, visible: false }));
-                }
-              }}
-            />
-          </ErrorBoundary>
-        </div>
-
-        <div className="nm-panel p-6 rounded-3xl border-white/5 flex flex-col gap-4 bg-black/40">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-[9px] font-black text-mystic-gray uppercase tracking-[0.3em] flex items-center gap-2"><i className="fa-solid fa-terminal text-luna-gold"></i> Live Console</h3>
-            <span className="text-[7px] font-mono text-mystic-gray opacity-30">SIGNAL_M_001</span>
-          </div>
-          <div className="space-y-2 max-h-32 overflow-y-auto scrollbar-hide pr-1">
-            {project.productionLog.slice(0, 5).map(log => (
-              <div key={log.id} className="text-[8px] font-mono leading-relaxed border-l-2 border-white/5 pl-2 py-1 flex gap-3">
-                <span className="text-mystic-gray opacity-40 shrink-0">{new Date(log.timestamp).toLocaleTimeString([], { hour12: false })}</span>
-                <span className={`truncate ${log.type === 'error' ? 'text-solar-amber' : log.type === 'ai_suggestion' ? 'text-luna-gold' : 'text-celestial-stone'}`}>
-                  {log.message}
-                </span>
+            {/* Mini production log */}
+            <div className="nm-panel p-4 rounded-none border-t border-white/5 flex flex-col gap-3 bg-black/40 flex-shrink-0">
+              <div className="flex items-center justify-between">
+                <h3 className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.3em] flex items-center gap-2">
+                  <i className="fa-solid fa-terminal text-luna-gold text-[8px]"></i> Live Console
+                </h3>
+                <span className="text-[6px] font-mono text-mystic-gray opacity-30">SIGNAL_M_001</span>
               </div>
-            ))}
-          </div>
-        </div>
+              <div className="space-y-1.5 max-h-28 overflow-y-auto scrollbar-hide">
+                {project.productionLog.slice(0, 5).map(log => (
+                  <div key={log.id} className="text-[7px] font-mono flex gap-2 leading-relaxed">
+                    <span className="text-mystic-gray opacity-40 shrink-0 w-10">{new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' })}</span>
+                    <span className={`truncate ${log.type === 'error' ? 'text-solar-amber' : log.type === 'ai_suggestion' ? 'text-luna-gold' : 'text-celestial-stone'}`}>
+                      {log.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
 
-        <button onClick={() => setChatOpen(false)} className="absolute top-28 right-8 w-11 h-11 nm-button rounded-full flex items-center justify-center text-mystic-gray hover:text-white transition-all xl:hidden border border-white/10 shadow-lg">
-          <i className="fa-solid fa-chevron-right"></i>
-        </button>
+            <button
+              onClick={() => setChatOpen(false)}
+              className="absolute top-24 right-3 w-8 h-8 nm-button rounded-full flex items-center justify-center text-mystic-gray hover:text-white transition-all border border-white/5 text-[10px]"
+            >
+              <i className="fa-solid fa-chevron-right"></i>
+            </button>
+          </div>
+        )}
       </aside>
 
-      {/* MODALS */}
-      {editingCharacter && <CharacterModal character={editingCharacter} onClose={() => setEditingCharacter(null)} onSave={handleCharacterSave} onRegenerateImage={async (id) => { const char = project.characters.find(c => c.id === id)!; const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed); handleCharacterSave({ ...char, referenceImageBase64: img }); }} />}
-      {inspectingScene && <SceneInspector scene={inspectingScene} characters={project.characters} assetImage={project.assets[inspectingScene.id]?.imageUrl} onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))} onClose={() => setInspectingScene(null)} />}
-      {showAssetLibrary && <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={() => setShowAssetLibrary(false)} onSelect={scrollToScene} />}
-      {showMixer && <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={() => setShowMixer(false)} />}
-      {showAuditor && <ContinuityAuditor project={project} onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => s.charactersInScene.includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))} onClose={() => setShowAuditor(false)} />}
-      {showDeck && <DirectorialDeck project={project} onClose={() => setShowDeck(false)} />}
-      {showBRoll && <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={() => setShowBRoll(false)} />}
-      {showStoryboard && <StoryboardView scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} onClose={() => setShowStoryboard(false)} />}
-      {showScriptDoctor && <ScriptDoctor project={project} onClose={() => setShowScriptDoctor(false)} />}
-      {showMastering && <VFXMaster mastering={project.mastering} cinematicProfile={project.cinematicProfile} onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))} onClose={() => setShowMastering(false)} />}
-      {project.activeDraft && <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />}
-      {showPlayer && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => setShowPlayer(false)} />}
-      {showRenderer && (
+      {/* ── QUALITY GATE MODAL (top-level, not inside aside) ─────────────── */}
+      <QualityGateModal
+        visible={qualityGateModal.visible}
+        gates={qualityGateModal.gates}
+        targetPhase={qualityGateModal.targetPhase || 'post'}
+        onClose={() => setQualityGateModal(prev => ({ ...prev, visible: false }))}
+        onProceed={() => {
+          setQualityGateModal(prev => ({ ...prev, visible: false }));
+          if (qualityGateModal.targetPhase) handleNavigatePhase(qualityGateModal.targetPhase);
+        }}
+        onFixGate={async (_gateOrId) => { /* auto-fix placeholder */ }}
+        onOverride={() => {
+          if (qualityGateModal.targetPhase) {
+            handleNavigatePhase(qualityGateModal.targetPhase);
+            setQualityGateModal(prev => ({ ...prev, visible: false }));
+          }
+        }}
+      />
+
+      {/* ── MODALS (single activeModal slot) ─────────────────────────────── */}
+      {editingCharacter && (
+        <CharacterModal
+          character={editingCharacter}
+          globalStyle={project.globalStyle}
+          onClose={() => setEditingCharacter(null)}
+          onSave={handleCharacterSave}
+          onRegenerateImage={async (id) => {
+            const char = project.characters.find(c => c.id === id)!;
+            const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed);
+            handleCharacterSave({ ...char, referenceImageBase64: img });
+          }}
+        />
+      )}
+      {inspectingScene && (
+        <SceneInspector
+          scene={inspectingScene}
+          characters={project.characters}
+          assetImage={project.assets[inspectingScene.id]?.imageUrl}
+          onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))}
+          onClose={() => setInspectingScene(null)}
+        />
+      )}
+      {activeModal?.type === 'asset_library' && (
+        <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={closeModal} onSelect={sceneId => { closeModal(); scrollToScene(sceneId); }} />
+      )}
+      {activeModal?.type === 'audio_mixer' && (
+        <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'continuity_auditor' && (
+        <ContinuityAuditor
+          project={project}
+          onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => (s.charactersInScene || []).includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))}
+          onMarkScenesForRegeneration={handleMarkScenesForRegeneration}
+          onClose={closeModal}
+        />
+      )}
+      {activeModal?.type === 'consistency_dashboard' && (
+        <ConsistencyDashboard project={project} onUpdateConsistencyScores={handleUpdateConsistencyScores} onMarkScenesForRegeneration={handleMarkScenesForRegeneration} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'directorial_deck' && (
+        <DirectorialDeck project={project} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'broll' && (
+        <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'storyboard' && (
+        <StoryboardView scenes={project.scenes} assets={project.assets} onSelectScene={sceneId => { closeModal(); scrollToScene(sceneId); }} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'script_doctor' && (
+        <ScriptDoctor project={project} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'vfx' && (
+        <VFXMaster
+          mastering={project.mastering}
+          cinematicProfile={project.cinematicProfile}
+          lightingBrief={project.lightingBrief}
+          onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))}
+          onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))}
+          onUpdateLightingBrief={brief => setProject(prev => ({ ...prev, lightingBrief: brief }))}
+          onClose={closeModal}
+        />
+      )}
+      {activeModal?.type === 'manifest' && (
+        <ProductionManifest project={project} youtubeMetadata={youtubeMetadata} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'player' && (
+        <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={closeModal} />
+      )}
+      {activeModal?.type === 'renderer' && (
         <ErrorBoundary>
-          <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} onCancel={() => setShowRenderer(false)} onComplete={() => { }} />
+          <Renderer
+            scenes={project.scenes}
+            assets={project.assets}
+            resolution={resolution}
+            aspectRatio={aspectRatio}
+            globalStyle={project.globalStyle || "Cinematic"}
+            mastering={project.mastering}
+            cinematicProfile={project.cinematicProfile}
+            outputFormat={serverRenderMode}
+            onCancel={closeModal}
+            onComplete={() => { }}
+          />
         </ErrorBoundary>
       )}
-      {showManifest && <ProductionManifest project={project} youtubeMetadata={youtubeMetadata} onClose={() => setShowManifest(false)} />}
+      {project.activeDraft && (
+        <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />
+      )}
 
       {/* Resume Batch Dialog */}
       {showResumeDialog && pendingBatchQueue && (
@@ -1507,7 +1941,7 @@ const App: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-widest mb-1">Failed</p>
-                    <p className="text-2xl font-black text-crimson-red font-mono">{pendingBatchQueue.failed.length}</p>
+                    <p className="text-2xl font-black text-solar-amber font-mono">{pendingBatchQueue.failed.length}</p>
                   </div>
                 </div>
               </div>
@@ -1541,6 +1975,7 @@ const App: React.FC = () => {
         </div>
       )}
 
+      </Suspense>
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} />
     </Layout>
   );

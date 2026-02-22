@@ -69,7 +69,7 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({ mastering, onUpdate, onC
                   value={f.value}
                   onChange={(e) => onUpdate({ [f.key]: parseInt(e.target.value) })}
                   className="absolute inset-0 opacity-0 cursor-ns-resize appearance-none"
-                  style={{ writingMode: 'bt-lr' as any }} 
+                  style={{ writingMode: 'vertical-lr' as any, direction: 'rtl' }}
                 />
                 
                 {/* Handle UI */}

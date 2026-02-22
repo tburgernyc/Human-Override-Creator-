@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { generateMarketingContent, generateThumbnail, analyzeViralPotential } from '../services/gemini';
+import { generateAllMarketingContent, generateThumbnail, analyzeViralPotential } from '../services/gemini';
 import { Character, ViralPotential } from '../types';
 
 interface YouTubeOptimizerProps {
@@ -24,13 +24,14 @@ export const YouTubeOptimizer: React.FC<YouTubeOptimizerProps> = ({ metadata, sc
   const [isGeneratingThumbnail, setIsGeneratingThumbnail] = useState(false);
   const [isAnalyzingViral, setIsAnalyzingViral] = useState(false);
 
-  const handleGeneratePost = async (platform: 'twitter' | 'linkedin') => {
-    setLoadingPlatform(platform);
+  // OPT-06: Batch both platforms in a single API call instead of two sequential ones
+  const handleGeneratePost = async (_platform: 'twitter' | 'linkedin') => {
+    setLoadingPlatform('all');
     try {
-        const content = await generateMarketingContent(platform, script, metadata);
-        setMultiplierContent(prev => ({ ...prev, [platform]: content }));
+        const results = await generateAllMarketingContent(['twitter', 'linkedin'], script, metadata);
+        setMultiplierContent({ twitter: results.twitter, linkedin: results.linkedin });
     } catch (e) {
-        console.error("Failed to generate post", e);
+        console.error("Failed to generate posts", e);
     } finally {
         setLoadingPlatform(null);
     }
@@ -151,12 +152,12 @@ export const YouTubeOptimizer: React.FC<YouTubeOptimizerProps> = ({ metadata, sc
                         <div className="p-4 bg-eclipse-black rounded-xl border border-white/5 text-[11px] text-celestial-stone italic whitespace-pre-wrap min-h-[100px]">
                             {multiplierContent[platform as keyof typeof multiplierContent] || `Awaiting ${platform} synthesis...`}
                         </div>
-                        <button 
+                        <button
                             onClick={() => handleGeneratePost(platform as any)}
-                            disabled={loadingPlatform === platform}
+                            disabled={loadingPlatform === 'all'}
                             className="w-full py-2 bg-luna-gold/10 text-luna-gold text-[9px] font-bold uppercase tracking-widest rounded-lg border border-luna-gold/30 hover:bg-luna-gold hover:text-white transition-all"
                         >
-                            {loadingPlatform === platform ? <i className="fa-solid fa-sync fa-spin mr-2"></i> : null}
+                            {loadingPlatform === 'all' ? <i className="fa-solid fa-sync fa-spin mr-2"></i> : null}
                             Generate Post
                         </button>
                     </div>

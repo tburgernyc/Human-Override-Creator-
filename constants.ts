@@ -1,10 +1,10 @@
 export const MODEL_NAMES = {
-  THINKING: 'gemini-2.0-flash',
+  THINKING: 'gemini-2.5-flash',
   IMAGE: 'gemini-2.5-flash-image', // Use dedicated image generation model for better quality
   VIDEO: 'veo-2.0-generate-preview',
   VIDEO_FAST: 'veo-2.0-generate-preview',
-  TTS: 'gemini-2.0-flash', // Use standard flash model - supports audio with proper config
-  CHECK: 'gemini-2.0-flash',
+  TTS: 'gemini-2.5-flash-preview-tts', // Dedicated TTS model - required for audio response modality
+  CHECK: 'gemini-2.5-flash',           // Vision-capable for consistency auditing
 };
 
 export interface VoicePreset {

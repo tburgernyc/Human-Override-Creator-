@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Scene, GeneratedAssets, Resolution, AspectRatio, TextOverlay, ProjectState, TransitionType, CameraMotion, ColorGrade } from '../types';
 import { decodeAudio } from '../services/gemini';
 import { MUSIC_TRACKS } from '../constants';
+import { lutProcessor, LUTPreset } from '../services/lutProcessor';
 
 // Free ambient SFX from Wikimedia Commons (no auth required)
 const AMBIENT_TRACKS: Record<string, string> = {
@@ -21,13 +22,14 @@ interface RendererProps {
     globalStyle: string;
     mastering?: ProjectState['mastering'];
     cinematicProfile?: ProjectState['cinematicProfile'];
+    outputFormat?: 'webm' | 'mp4-server';
     onComplete: (url: string) => void;
     onCancel: () => void;
 }
 
 type RenderState = 'initializing' | 'rendering' | 'validating' | 'complete' | 'error';
 
-export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, aspectRatio, globalStyle, mastering, cinematicProfile = 'natural', onComplete, onCancel }) => {
+export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, aspectRatio, globalStyle, mastering, cinematicProfile = 'natural', outputFormat = 'webm', onComplete, onCancel }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [renderState, setRenderState] = useState<RenderState>('initializing');
     const [statusMessage, setStatusMessage] = useState("Initializing Pipeline...");
@@ -55,8 +57,8 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         }
     };
 
-    let width = resolution === Resolution.FHD ? 1920 : 1280;
-    let height = resolution === Resolution.FHD ? 1080 : 720;
+    let width = resolution === Resolution.UHD ? 3840 : resolution === Resolution.FHD ? 1920 : 1280;
+    let height = resolution === Resolution.UHD ? 2160 : resolution === Resolution.FHD ? 1080 : 720;
 
     if (aspectRatio === AspectRatio.PORTRAIT) [width, height] = [height, width];
     else if (aspectRatio === AspectRatio.SQUARE) width = height = resolution === Resolution.FHD ? 1080 : 720;
@@ -76,10 +78,12 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         if (cinematicProfile === 'vintage') filters.push('sepia(35%) contrast(90%) brightness(95%)');
         if (cinematicProfile === 'noir') filters.push('grayscale(100%) contrast(150%)');
 
-        // LUT Preset simulations
+        // LUT Preset simulations — inter-scene grade matching via CSS filters
         if (mastering?.lutPreset === 'kodak_5219') filters.push('contrast(110%) saturate(105%) sepia(5%)');
-        if (mastering?.lutPreset === 'noir') filters.push('grayscale(100%) contrast(120%)');
-        if (mastering?.lutPreset === 'technicolor') filters.push('saturate(180%) contrast(110%)');
+        if (mastering?.lutPreset === 'fuji_400h') filters.push('contrast(95%) saturate(90%) brightness(105%) hue-rotate(5deg) sepia(8%)');
+        if (mastering?.lutPreset === 'bleach_bypass') filters.push('contrast(130%) saturate(60%) brightness(90%)');
+        if (mastering?.lutPreset === 'vintage_faded') filters.push('contrast(85%) saturate(80%) brightness(108%) sepia(15%)');
+        if (mastering?.lutPreset === 'clean_rec709') filters.push('contrast(100%) saturate(100%) brightness(100%)');
 
         ctx.filter = filters.join(' ') || 'none';
     };
@@ -174,7 +178,22 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
 
         if (p < transThreshold && prevMedia) {
             const transP = p / transThreshold;
-            if (transition === 'fade' || transition === 'crossfade') {
+            if (transition === 'dissolve') {
+                // Film burn dissolve: crossfade with white flash arc at midpoint
+                ctx.globalAlpha = 1 - transP;
+                ctx.drawImage(prevMedia, 0, 0, w, h);
+                ctx.globalAlpha = transP;
+                ctx.drawImage(media, 0, 0, w, h);
+                const burnPeak = Math.sin(transP * Math.PI); // 0→1→0 parabolic arc
+                if (burnPeak > 0.25) {
+                    ctx.save();
+                    ctx.globalCompositeOperation = 'screen';
+                    ctx.globalAlpha = burnPeak * 0.38;
+                    ctx.fillStyle = '#fff8e8'; // Warm film burn white
+                    ctx.fillRect(0, 0, w, h);
+                    ctx.restore();
+                }
+            } else if (transition === 'fade' || transition === 'crossfade') {
                 ctx.globalAlpha = 1 - transP;
                 ctx.drawImage(prevMedia, 0, 0, w, h);
                 ctx.globalAlpha = transP;
@@ -225,9 +244,46 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 const tracks = [...stream.getVideoTracks(), ...destNode.stream.getAudioTracks()];
                 const combinedStream = new MediaStream(tracks);
 
-                const recorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 25000000 });
+                // Server-render mode: collect frames to send to /api/render
+                const serverFrames: string[] = [];
+                let serverAudioBase64 = '';
+
+                // Prefer AV1 for ~30% better compression; fall back to VP9 if unsupported
+                const preferredMimeType = 'video/webm;codecs=av1';
+                const mimeType = MediaRecorder.isTypeSupported(preferredMimeType) ? preferredMimeType : 'video/webm;codecs=vp9';
+                const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 40000000 });
                 recorder.ondataavailable = e => chunks.push(e.data);
-                recorder.onstop = () => {
+                recorder.onstop = async () => {
+                    if (outputFormat === 'mp4-server') {
+                        // Send frames to server for FFmpeg-based MP4 encoding
+                        setStatusMessage('Uploading to server render pipeline...');
+                        try {
+                            const PROXY_URL = (typeof window !== 'undefined' && window.location.hostname !== 'localhost')
+                                ? `${window.location.origin}` : 'http://localhost:3001';
+                            const resp = await fetch(`${PROXY_URL}/api/render`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    frames: serverFrames,
+                                    fps: 30,
+                                    resolution: resolution === Resolution.FHD ? '1080p' : '720p',
+                                    format: 'mp4',
+                                })
+                            });
+                            if (!resp.ok) throw new Error(`Server render failed: ${resp.status}`);
+                            const blob = await resp.blob();
+                            const url = URL.createObjectURL(blob);
+                            setFileSize(`${(blob.size / 1024 / 1024).toFixed(2)} MB`);
+                            setFinalUrl(url);
+                            setRenderState('complete');
+                            onComplete(url);
+                        } catch (err) {
+                            setRenderState('error');
+                            setStatusMessage(`Server render failed: ${(err as any)?.message || 'Unknown error'}`);
+                        }
+                        return;
+                    }
+
                     if (chunks.length === 0) {
                         setRenderState('error');
                         setStatusMessage('Render produced no output data.');
@@ -235,11 +291,8 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     }
                     const blob = new Blob(chunks, { type: 'video/webm' });
                     const url = URL.createObjectURL(blob);
-
-                    // Calculate file size for display
                     const sizeInMB = (blob.size / (1024 * 1024)).toFixed(2);
                     setFileSize(`${sizeInMB} MB`);
-
                     setFinalUrl(url);
                     setRenderState('complete');
                     onComplete(url);
@@ -256,7 +309,10 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     setStatusMessage(`Manifesting Sequence ${i + 1}/${scenes.length}`);
                     setProgress((i / scenes.length) * 100);
 
-                    const duration = (scene.estimatedDuration || 5) * 1000;
+                    // Use locked audio duration if available; fall back to estimatedDuration
+                    const audioDurationMs = scene.actualAudioDuration ? (scene.actualAudioDuration * 1000 + 400) : null;
+                    const estimatedMs = (scene.estimatedDuration || 5) * 1000;
+                    const duration = audioDurationMs ? Math.max(audioDurationMs, estimatedMs) : estimatedMs;
                     const startTime = Date.now();
 
                     // TTS mixing
@@ -288,6 +344,9 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                         await new Promise(r => media!.onload = r);
                     }
 
+                    const lutPreset = (mastering?.lutPreset || 'none') as LUTPreset;
+                    const useLUT = lutPreset !== 'none';
+
                     while (Date.now() - startTime < duration) {
                         if (isCancelled) break;
                         const elapsed = Date.now() - startTime;
@@ -300,6 +359,20 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                             if (scene.textOverlay) {
                                 drawOverlayText(ctx, scene.textOverlay, width, height, p);
                             }
+                            // Apply WebGL LUT if selected
+                            if (useLUT) {
+                                try {
+                                    const imageData = ctx.getImageData(0, 0, width, height);
+                                    const graded = lutProcessor.applyToImageData(imageData, lutPreset);
+                                    ctx.putImageData(graded, 0, 0);
+                                } catch (lutErr) {
+                                    // LUT application failed — continue without it
+                                }
+                            }
+                        }
+                        // Capture frame for server-render mode (at ~10fps to limit payload)
+                        if (outputFormat === 'mp4-server' && Math.floor(elapsed / 100) !== Math.floor((elapsed - 33) / 100)) {
+                            serverFrames.push(canvas.toDataURL('image/png').split(',')[1]);
                         }
                         await new Promise(r => requestAnimationFrame(r));
                     }
@@ -315,7 +388,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
 
         startRendering();
         return () => { isCancelled = true; if (audioCtx) audioCtx.close(); };
-    }, [scenes, assets, cinematicProfile]);
+    }, [scenes, assets, cinematicProfile, resolution, aspectRatio, mastering, globalStyle]);
 
     return (
         <div className="fixed inset-0 bg-eclipse-black/98 flex flex-col items-center justify-center z-[500] backdrop-blur-3xl p-6">
