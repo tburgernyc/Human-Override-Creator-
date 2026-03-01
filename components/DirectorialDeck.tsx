@@ -79,7 +79,7 @@ export const DirectorialDeck: React.FC<DirectorialDeckProps> = ({ project, onClo
   };
 
   return (
-    <div className="fixed inset-0 z-[400] bg-eclipse-black flex items-center justify-center p-6 animate-in fade-in zoom-in-105 duration-1000 overflow-hidden">
+    <div className="fixed inset-0 z-[400] bg-eclipse-black flex items-center justify-center p-6 animate-in fade-in zoom-in-105 duration-1000 overflow-y-auto">
       {/* Background Stylized Elements */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-5">
         <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-luna-gold rounded-full blur-[200px]"></div>

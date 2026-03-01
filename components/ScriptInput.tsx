@@ -7,6 +7,7 @@ interface ScriptInputProps {
   onScriptChange: (script: string) => void;
   onAnalyze: (script: string) => void;
   isAnalyzing: boolean;
+  analysisError?: string | null;
 }
 
 const TEMPLATES = [
@@ -16,7 +17,7 @@ const TEMPLATES = [
   { name: 'Explainer', prompt: 'A clear, concise, and friendly tutorial or explanation script for ' },
 ];
 
-export const ScriptInput: React.FC<ScriptInputProps> = ({ script, onScriptChange, onAnalyze, isAnalyzing }) => {
+export const ScriptInput: React.FC<ScriptInputProps> = ({ script, onScriptChange, onAnalyze, isAnalyzing, analysisError }) => {
   const [mode, setMode] = useState<'manual' | 'ai'>('manual');
   // script and setScript removed, using props
   const [prompt, setPrompt] = useState("");
@@ -155,26 +156,36 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ script, onScriptChange
               </button>
             </div>
 
-            <div className="flex justify-between items-center">
-              <div className="flex gap-4">
-                <span className="text-[10px] text-mystic-gray uppercase font-mono"><span className="text-luna-gold">Tip:</span> Use [Scene: ...] for visual instructions.</span>
+            <div className="flex flex-col gap-3">
+              <div className="flex justify-between items-center">
+                <div className="flex gap-4">
+                  <span className="text-[10px] text-mystic-gray uppercase font-mono"><span className="text-luna-gold">Tip:</span> Use [Scene: ...] for visual instructions.</span>
+                </div>
+                <button
+                  onClick={() => onAnalyze(script)}
+                  disabled={isAnalyzing || !script.trim()}
+                  className={`
+                              nm-button group relative px-10 py-4 rounded-xl font-bold tracking-widest text-[10px] transition-all duration-300 uppercase
+                              ${isAnalyzing
+                      ? 'opacity-30 cursor-not-allowed'
+                      : 'nm-button-gold text-white hover:shadow-nm-gold'
+                    }
+                          `}
+                >
+                  <span className="flex items-center gap-3">
+                    <i className="fa-solid fa-sparkles"></i>
+                    Initialize Pipeline
+                  </span>
+                </button>
               </div>
-              <button
-                onClick={() => onAnalyze(script)}
-                disabled={isAnalyzing || !script.trim()}
-                className={`
-                            nm-button group relative px-10 py-4 rounded-xl font-bold tracking-widest text-[10px] transition-all duration-300 uppercase
-                            ${isAnalyzing
-                    ? 'opacity-30 cursor-not-allowed'
-                    : 'nm-button-gold text-white hover:shadow-nm-gold'
-                  }
-                        `}
-              >
-                <span className="flex items-center gap-3">
-                  <i className="fa-solid fa-sparkles"></i>
-                  Initialize Pipeline
-                </span>
-              </button>
+              {analysisError && (
+                <div className="nm-inset-input rounded-xl p-4 border border-red-500/20 bg-red-500/5">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-400 mb-1 flex items-center gap-2">
+                    <i className="fa-solid fa-triangle-exclamation"></i> Analysis Failed
+                  </p>
+                  <p className="text-xs text-celestial-stone font-mono whitespace-pre-wrap">{analysisError}</p>
+                </div>
+              )}
             </div>
           </div>
         ) : (

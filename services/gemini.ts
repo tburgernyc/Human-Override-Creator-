@@ -114,12 +114,14 @@ const cleanJsonResponse = (text: string): string => {
 };
 
 const getAIClient = async (): Promise<GoogleGenAI> => {
-  // Support both API_KEY (for backwards compatibility) and GEMINI_API_KEY (standard)
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("API Key not found. Please set GEMINI_API_KEY in your .env file.");
-  }
-  return new GoogleGenAI({ apiKey });
+  // All API calls are routed through the server-side proxy so the real
+  // GEMINI_API_KEY is never shipped in the browser bundle.
+  // The proxy at /api/gemini/* strips any client-sent key and injects the
+  // real key from the server environment before forwarding to Google.
+  return new GoogleGenAI({
+    apiKey: 'via-proxy',
+    httpOptions: { baseUrl: `${PROXY_URL}/api/gemini` },
+  });
 };
 
 const withTimeout = <T>(promise: Promise<T>, ms: number, label: string = 'Operation'): Promise<T> => {
@@ -217,23 +219,22 @@ INTERVENTION TIMING:
 - Failures occur → Offer concrete fixes
 - Batch complete → Celebrate + suggest next phase
 
-RESPONSE STRUCTURE (MANDATORY):
-A. PHASE STATUS: Current phase, completion %, critical blockers
-B. PROACTIVE SUGGESTION: One concrete action to take NOW (include emoji, make it exciting)
-C. QUALITY ALERTS: Any blockers or warnings preventing progression
-D. DELIVERABLES: Ready-to-use content if applicable (scripts, prompts, metadata)
-E. TOOL RECOMMENDATIONS: Which optimization tools would help right now (max 2)
+COMMUNICATION STYLE (MANDATORY):
+- Write in plain, direct sentences only. No bullet headers, no lettered sections (A/B/C/D/E), no labeled prefixes of any kind.
+- Do NOT use emojis in any message, ever.
+- Keep responses to 1-3 sentences unless you are generating deliverable content (scripts, prompts, metadata, etc.).
+- Lead decisively: tell the user exactly what to do next and why it matters. You are the expert; they are following your direction.
+- When celebrating a milestone, do it in one sentence then immediately direct to the next action.
 
 PRINCIPLES:
-1. Action-first: Propose concrete next steps with one-click execution
-2. Quality-focused: Suggest improvements before user proceeds
-3. Tool advocate: Actively promote hidden optimization features
-4. Celebrate wins: Acknowledge milestones and progress
-5. Continuity-aware: Preserve project tone and character consistency
-6. Phase-aware: Know where user is and where they should go next
-7. Minimize friction: Make it easy to execute your suggestions
+1. Action-first: Always end with a clear next step.
+2. Quality-focused: Flag issues before the user proceeds to the next phase.
+3. Tool advocate: Mention relevant tools when they will genuinely help.
+4. Continuity-aware: Preserve project tone and character consistency.
+5. Phase-aware: Know exactly where the user is and where they should go next.
+6. Minimize friction: Make it easy to act on your suggestions.
 
-STYLE: Urgent, cinematic, directive, solutions-oriented. Use imperative mood ("Run the audit", "Generate scenes", "Apply VFX"). Lead, don't follow. Be enthusiastic about wins.
+STYLE: Decisive, cinematic, expert. Use imperative mood ("Run the audit", "Generate scenes", "Apply VFX"). Be direct — the user depends on you to drive the production forward.
 
 AGENTIC CAPABILITIES — YOU CAN NOW TAKE THESE ACTIONS DIRECTLY:
 - reformat_script: When the user has a raw, unformatted script, call this to structure it. Suggest this proactively after any script paste.
@@ -452,45 +453,47 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
   // OPT-10: Only send voice preset list when characters actually need voice assignment
   const needsVoiceAssignment = currentProject.characters.some(c => !c.voiceId);
 
-  const response = await withTimeout(ai.models.generateContent({
-    model: MODEL_NAMES.CHECK,
-    contents: [
-      ...windowedHistory.map(m => ({ role: m.role, parts: [{ text: m.content }] })),
-      {
-        role: 'user', parts: [
-          ...(sceneImages || []).map(img => ({ inlineData: { mimeType: 'image/png' as const, data: img.split(',')[1] } })),
-          {
-          // OPT-03: Compressed project context — strips redundant fields to cut ~1,500–2,000 tokens per call
-          text: `CURRENT_PHASE: ${phase.toUpperCase()}
+  const buildContents = () => [
+    ...windowedHistory.map(m => ({ role: m.role, parts: [{ text: m.content }] })),
+    {
+      role: 'user', parts: [
+        ...(sceneImages || []).map(img => ({ inlineData: { mimeType: 'image/png' as const, data: img.split(',')[1] } })),
+        {
+        // OPT-03: Compressed project context — strips redundant fields to cut ~1,500–2,000 tokens per call
+        text: `CURRENT_PHASE: ${phase.toUpperCase()}
 PHASE_PROGRESS: ${phase === 'genesis' ? (currentProject.script ? 'Script entered, not yet analyzed' : 'No script yet') : phase === 'manifest' ? `${totalScenes} scenes, ${currentProject.characters.length} characters, 0/${totalScenes} assets` : `${completedAssets}/${totalScenes} assets complete`}
 PROJECT_CONTEXT: ${JSON.stringify({
-            scenes: currentProject.scenes.map(s => ({
-              id: s.id,
-              desc: s.description?.substring(0, 60),
-              // OPT-03: Truncate narrator lines — 3 lines max, 40 chars each (was 80 chars, all lines)
-              narratorLines: s.narratorLines?.slice(0, 3).map(l => ({ speaker: l.speaker, text: l.text.substring(0, 40) })),
-            })),
-            // OPT-03: Characters → compact summary (no full description/visualPrompt — Director uses tool calls to get those when needed)
-            characters: currentProject.characters.map(c => ({
-              name: c.name, gender: c.gender,
-              voiceId: c.voiceId || 'UNASSIGNED',
-              hasDNA: !!c.characterDNA,
-            })),
-            // OPT-10: Omit voice list when all voices are already assigned — saves ~300 tokens
-            ...(needsVoiceAssignment ? {
-              available_voices: VOICE_PRESETS
-                .filter((v, i, arr) => arr.findIndex(x => x.apiVoiceName === v.apiVoiceName) === i)
-                .map(v => `${v.id}:${v.gender}`),
-            } : {}),
-            style: currentProject.globalStyle,
-            assets: Object.keys(currentProject.assets).length,
-          })}\n\nUSER_MESSAGE: ${message}`
-        }]
-      }
-    ] as any,
+          scenes: currentProject.scenes.map(s => ({
+            id: s.id,
+            desc: s.description?.substring(0, 60),
+            // OPT-03: Truncate narrator lines — 3 lines max, 40 chars each (was 80 chars, all lines)
+            narratorLines: s.narratorLines?.slice(0, 3).map(l => ({ speaker: l.speaker, text: l.text.substring(0, 40) })),
+          })),
+          // OPT-03: Characters → compact summary (no full description/visualPrompt — Director uses tool calls to get those when needed)
+          characters: currentProject.characters.map(c => ({
+            name: c.name, gender: c.gender,
+            voiceId: c.voiceId || 'UNASSIGNED',
+            hasDNA: !!c.characterDNA,
+          })),
+          // OPT-10: Omit voice list when all voices are already assigned — saves ~300 tokens
+          ...(needsVoiceAssignment ? {
+            available_voices: VOICE_PRESETS
+              .filter((v, i, arr) => arr.findIndex(x => x.apiVoiceName === v.apiVoiceName) === i)
+              .map(v => `${v.id}:${v.gender}`),
+          } : {}),
+          style: currentProject.globalStyle,
+          assets: Object.keys(currentProject.assets).length,
+        })}\n\nUSER_MESSAGE: ${message}`
+      }]
+    }
+  ] as any;
+
+  const doGenerate = (useCachedContent: boolean) => withTimeout(ai.models.generateContent({
+    model: MODEL_NAMES.CHECK,
+    contents: buildContents(),
     config: {
       // OPT-12: Use cached system instruction when available — avoids billing ~1,500 tokens per call
-      ...(cachedSystemName
+      ...(useCachedContent && cachedSystemName
         ? { cachedContent: cachedSystemName }
         : { systemInstruction: OVERRIDE_BOT_SYSTEM_INSTRUCTION }),
       tools: [{ functionDeclarations: tools }],
@@ -498,7 +501,26 @@ PROJECT_CONTEXT: ${JSON.stringify({
     }
   }), 120000, 'Director chat');
 
-  return response;
+  // Attempt with cached content first; on cache-miss errors, invalidate and fall back to inline system instruction
+  try {
+    return await doGenerate(true);
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    const isCacheError = cachedSystemName && (
+      msg.includes('404') ||
+      msg.includes('not found') ||
+      msg.includes('INVALID_ARGUMENT') ||
+      msg.toLowerCase().includes('cachedcontent') ||
+      msg.toLowerCase().includes('cached content')
+    );
+    if (isCacheError) {
+      console.warn('[Director] Cached system instruction invalid — resetting cache and retrying without it.');
+      _directorCacheName = null;
+      _directorCacheExpiry = 0;
+      return await doGenerate(false);
+    }
+    throw err;
+  }
 };
 
 export interface DirectorGuidance {
@@ -903,7 +925,13 @@ IMPORTANT: Ensure all arrays and objects are properly closed. Do not truncate th
     }
   }), 120000, 'Script analysis'));
 
-  const rawText = response.text || "{}";
+  const rawText = response.text;
+  if (!rawText || rawText.trim() === '') {
+    throw new Error(
+      'Gemini returned an empty response. This usually means the script triggered content filters or the API returned no data. ' +
+      'Try reformatting your script with [Scene: ...] markers, reduce its length, or check for content policy issues.'
+    );
+  }
 
   // Check if response was truncated (missing closing brace or incomplete structure)
   const openBraces = (rawText.match(/{/g) || []).length;
@@ -989,6 +1017,17 @@ IMPORTANT: Ensure all arrays and objects are properly closed. Do not truncate th
   if (!Array.isArray(data.scenes)) {
     console.warn('[analyzeScript] Scenes array missing, using empty array');
     data.scenes = [];
+  }
+
+  // If both arrays are empty the AI found nothing useful — surface this as an error
+  // rather than silently returning an empty project that gets stuck at 40%.
+  if (data.characters.length === 0 && data.scenes.length === 0) {
+    throw new Error(
+      'Script analysis found no characters or scenes. ' +
+      'Make sure your script includes named characters with dialogue and scene descriptions. ' +
+      'Use [Scene: ...] markers for best results, e.g.:\n\n' +
+      '[Scene: A dark alley at night]\nNarrator: The city never sleeps.'
+    );
   }
 
   // Optional objects - provide defaults if missing

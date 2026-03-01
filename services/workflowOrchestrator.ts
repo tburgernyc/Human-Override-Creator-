@@ -58,12 +58,9 @@ export const QUALITY_GATES: Record<ProductionPhase, QualityGate[]> = {
     {
       id: 'missing_voices',
       condition: (p) => !p.characters.some(c => !c.voiceId),
-      message: 'All characters must have voice assignments',
-      severity: 'blocker',
-      autoFixable: true,
-      autoFixAction: async (p) => {
-        // This will be handled by triggering voice casting modal
-      }
+      message: 'Some characters have no voice assigned — review in Cast section',
+      severity: 'warning',
+      autoFixable: false
     },
     {
       id: 'low_scene_count',
@@ -75,8 +72,8 @@ export const QUALITY_GATES: Record<ProductionPhase, QualityGate[]> = {
     {
       id: 'no_continuity_check',
       condition: (p) => {
-        // Check if continuity auditor was run (via tool usage history)
-        return p.toolUsageHistory?.some(t => t.toolId === 'continuity-auditor') || false;
+        // Check if continuity audit was completed (tracked via workflowProgress)
+        return p.workflowProgress?.manifest?.completedSteps?.includes('run_continuity_audit') ?? false;
       },
       message: 'Character continuity has not been audited',
       severity: 'warning',
@@ -202,6 +199,22 @@ export const WORKFLOW_STEPS: Record<ProductionPhase, { required: WorkflowStep[],
     ],
     optional: [
       {
+        id: 'optimize_character_prompts',
+        label: 'Optimize Character Visual Prompts',
+        description: 'Upgrade character descriptions to cinematic-grade for better image generation',
+        status: 'pending',
+        autoExecutable: true,
+        priority: 'recommended'
+      },
+      {
+        id: 'apply_lighting_brief',
+        label: 'Apply Cinematic Lighting Brief',
+        description: 'Establish consistent mood, time-of-day, and lighting across all scenes',
+        status: 'pending',
+        autoExecutable: true,
+        priority: 'recommended'
+      },
+      {
         id: 'run_continuity_audit',
         label: 'Run Continuity Auditor',
         description: 'Check character consistency across scenes',
@@ -281,6 +294,14 @@ export const WORKFLOW_STEPS: Record<ProductionPhase, { required: WorkflowStep[],
         autoExecutable: false,
         priority: 'optional',
         toolId: 'audio-mixer'
+      },
+      {
+        id: 'run_video_consistency_audit',
+        label: 'Consistency Audit',
+        description: 'Scan generated scenes for character visual drift and flag scenes for regeneration',
+        status: 'pending',
+        autoExecutable: true,
+        priority: 'recommended'
       }
     ]
   },
@@ -367,16 +388,19 @@ export function getPhaseChecklist(phase: ProductionPhase, project: ProjectState)
         return { ...step, status: project.keyArtSceneId ? 'completed' : 'pending' };
       case 'run_viral_analysis':
         return { ...step, status: project.viralData ? 'completed' : 'pending' };
+      case 'generate_seo_metadata':
+        return { ...step, status: project.youtubeMetadata ? 'completed' : 'pending' };
       case 'apply_vfx_mastering':
         return { ...step, status: project.mastering ? 'completed' : 'pending' };
       case 'set_style':
         return { ...step, status: project.globalStyle ? 'completed' : 'pending' };
+      case 'apply_lighting_brief':
+        return { ...step, status: project.lightingBrief ? 'completed' : 'pending' };
       case 'run_continuity_audit':
-        const audited = project.toolUsageHistory?.some(t => t.toolId === 'continuity-auditor');
-        return { ...step, status: audited ? 'completed' : 'pending' };
       case 'run_script_doctor':
-        const doctored = project.toolUsageHistory?.some(t => t.toolId === 'script-doctor');
-        return { ...step, status: doctored ? 'completed' : 'pending' };
+        // Completion is tracked via markStepCompleted (workflowProgress.completedSteps).
+        // No project-state auto-detection — the steps are optional and user/Director-driven.
+        return step;
       default:
         return step;
     }

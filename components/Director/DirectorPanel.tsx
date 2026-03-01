@@ -13,6 +13,8 @@ interface DirectorPanelProps {
     projectName: string;
     project: ProjectState;
     onExecuteTool: (name: string, args: any) => Promise<any>;
+    onGenerateCharacters?: () => Promise<void>;
+    onGenerateScenes?: () => Promise<void>;
 }
 
 export const DirectorPanel: React.FC<DirectorPanelProps> = ({
@@ -22,12 +24,15 @@ export const DirectorPanel: React.FC<DirectorPanelProps> = ({
     projectName,
     project,
     onExecuteTool,
+    onGenerateCharacters,
+    onGenerateScenes,
 }) => {
-    const { messages, isTyping, sendMessage, sendProactiveGreeting } = useDirector({
+    const { messages, isTyping, sendMessage, sendProactiveGreeting, handleAction } = useDirector({
         currentPhase,
-        projectName,
         project,
         onExecuteTool,
+        onGenerateCharacters,
+        onGenerateScenes,
     });
 
     // Auto-send greeting when panel opens
@@ -58,9 +63,8 @@ export const DirectorPanel: React.FC<DirectorPanelProps> = ({
                 <DirectorChatThread
                     messages={messages}
                     isTyping={isTyping}
-                    currentPhase={currentPhase}
-                    project={project}
                     onChipSelect={sendMessage}
+                    onAction={handleAction}
                 />
 
                 <DirectorInput

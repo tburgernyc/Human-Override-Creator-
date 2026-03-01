@@ -44,7 +44,7 @@ app.get('/api/health', (_req, res) => {
 app.all('/api/gemini/{*path}', async (req: any, res) => {
     try {
         const targetPath = req.params.path;
-        const baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+        const baseUrl = 'https://generativelanguage.googleapis.com';
         const url = new URL(`${baseUrl}/${targetPath}`);
         url.searchParams.set('key', GEMINI_API_KEY!);
 

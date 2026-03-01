@@ -226,6 +226,7 @@ export interface ProjectState {
   renderUrl?: string;
   globalStyle?: string;
   viralData?: ViralPotential;
+  youtubeMetadata?: { hookScore: number; audience: string; suggestedTitles: string[] };
   productionSeed: number;
   keyArtSceneId?: number;
   activeDraft?: DirectorDraft | null;

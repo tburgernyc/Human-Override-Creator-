@@ -18,9 +18,6 @@ const CastEnsemble      = lazy(() => import('./components/CastEnsemble').then(m 
 const ProductionTimeline = lazy(() => import('./components/ProductionTimeline').then(m => ({ default: m.ProductionTimeline })));
 const YouTubeOptimizer  = lazy(() => import('./components/YouTubeOptimizer').then(m => ({ default: m.YouTubeOptimizer })));
 
-// ── Lazy-loaded Director sidebar ─────────────────────────────────────────────
-const DirectorAssistant = lazy(() => import('./components/DirectorAssistant').then(m => ({ default: m.DirectorAssistant })));
-
 // ── Lazy-loaded modals (fetched on first open) ───────────────────────────────
 const CharacterModal      = lazy(() => import('./components/CharacterModal').then(m => ({ default: m.CharacterModal })));
 const SceneInspector      = lazy(() => import('./components/SceneInspector').then(m => ({ default: m.SceneInspector })));
@@ -220,7 +217,6 @@ const App: React.FC = () => {
   const [hasAuth, setHasAuth] = useState(() => typeof window === 'undefined' || !(window as any).aistudio);
   const [chatOpen, setChatOpen] = useState(false);
   const batchCancellationRef = useRef(false);
-  const [youtubeMetadata, setYoutubeMetadata] = useState<any | null>(null);
   const [autoDiagnosisTriggered, setAutoDiagnosisTriggered] = useState(false);
   const [pendingBatchQueue, setPendingBatchQueue] = useState<BatchQueue | null>(null);
   const [showResumeDialog, setShowResumeDialog] = useState(false);
@@ -273,6 +269,7 @@ const App: React.FC = () => {
   }>({ visible: false, gates: [], targetPhase: null });
   const [directorMode, setDirectorMode] = useState<'guided' | 'expert'>('guided');
   const [workflowExpanded, setWorkflowExpanded] = useState(true);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const prevProjectRef = useRef<ProjectState>(project);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -427,7 +424,18 @@ const App: React.FC = () => {
 
   const handleToolExecution = async (name: string, args: any) => {
     addLog(`OverrideBot executing command: ${name}`, "ai_suggestion");
-    if (name === 'update_scene') {
+    if (name === 'get_project_context') {
+      return JSON.stringify({
+        phase: activePhase,
+        script: project.script?.substring(0, 500),
+        characters: project.characters.map(c => ({ name: c.name, gender: c.gender, voiceId: c.voiceId, hasDNA: !!c.characterDNA })),
+        scenes: project.scenes.map(s => ({ id: s.id, description: s.description?.substring(0, 80) })),
+        assets: Object.fromEntries(Object.entries(project.assets).map(([k, v]) => [k, v?.status])),
+        style: project.globalStyle,
+        hasViralData: !!project.viralData,
+        hasMastering: !!project.mastering,
+      });
+    } else if (name === 'update_scene') {
       const { scene_id, updates } = args;
       setProject(p => ({
         ...p,
@@ -505,11 +513,18 @@ const App: React.FC = () => {
       const { toolId, reason, autoOpen } = args;
       addLog(`Director suggests ${toolId}: ${reason}`, "ai_suggestion");
       if (autoOpen) {
-        // Map toolId to UI
-        if (toolId === 'script-doctor') setActiveModal({ type: 'script_doctor' });
-        if (toolId === 'continuity-auditor') setActiveModal({ type: 'continuity_auditor' });
+        // Map toolId to UI modal and mark the associated workflow step complete
+        if (toolId === 'script-doctor') {
+          setActiveModal({ type: 'script_doctor' });
+          setProject(p => markStepCompleted('genesis', 'run_script_doctor', p));
+        }
+        if (toolId === 'continuity-auditor') {
+          setActiveModal({ type: 'continuity_auditor' });
+          setProject(p => markStepCompleted('manifest', 'run_continuity_audit', p));
+        }
         if (toolId === 'vfx-master') setActiveModal({ type: 'vfx' });
-        if (toolId === 'youtube-optimizer') setActiveModal({ type: 'manifest' });
+        if (toolId === 'youtube-optimizer') handleNavigatePhase('post');
+        if (toolId === 'audio-mixer') setActiveModal({ type: 'audio_mixer' });
       }
       return "Suggestion presented to user.";
     } else if (name === 'execute_workflow_step') {
@@ -520,7 +535,9 @@ const App: React.FC = () => {
       await handleAssignShotList();
       return "Shot list assigned to all scenes.";
     } else if (name === 'run_consistency_audit') {
+      // run_consistency_audit opens the Consistency Dashboard (post-synthesis cross-scene audit)
       setActiveModal({ type: 'consistency_dashboard' });
+      setProject(p => markStepCompleted('synthesis', 'run_video_consistency_audit', p));
       return "Consistency Dashboard opened.";
     } else if (name === 'reformat_script') {
       const reformatted = await reformatScript(project.script || '', project.globalStyle || 'Cinematic', project.productionSeed);
@@ -560,7 +577,61 @@ const App: React.FC = () => {
         handleMarkScenesForRegeneration(inconsistentSceneIds);
         addLog(`Director flagged ${inconsistentSceneIds.length} inconsistent scenes for regeneration.`, "ai_suggestion");
       }
+      // Mark synthesis consistency step as complete regardless of results
+      setProject(p => markStepCompleted('synthesis', 'run_video_consistency_audit', p));
+      addLog(`Consistency audit complete: ${report}`, "success");
       return report;
+    } else if (name === 'generate_character_images') {
+      // Director-triggered batch character image generation (with DNA synthesis)
+      const charsToGenerate = project.characters.filter(c => !c.referenceImageBase64);
+      if (charsToGenerate.length === 0) return "All characters already have reference images.";
+      addLog(`Generating images for ${charsToGenerate.length} character(s)...`, "system");
+      let generated = 0;
+      for (const char of charsToGenerate) {
+        try {
+          const img = await generateCharacterImage(char, resolution, project.globalStyle || 'Cinematic', project.productionSeed);
+          // Commit image and mark approved
+          setProject(prev => ({
+            ...prev,
+            characters: prev.characters.map(c => c.id === char.id
+              ? { ...c, referenceImageBase64: img, referenceImageApproved: true }
+              : c)
+          }));
+          generated++;
+          addLog(`Generated image for ${char.name}. Locking identity...`, "success");
+          // Synthesize CharacterDNA to commit cross-scene visual consistency
+          try {
+            const charWithImage = { ...char, referenceImageBase64: img, referenceImageApproved: true as const };
+            const dna = await synthesizeCharacterDNA(charWithImage, project.globalStyle || 'Cinematic', project.productionSeed);
+            setProject(prev => ({
+              ...prev,
+              characters: prev.characters.map(c => c.id === char.id ? { ...c, characterDNA: dna } : c)
+            }));
+            addLog(`Character DNA locked for "${char.name}".`, "success");
+          } catch (dnaErr: any) {
+            addLog(`DNA synthesis failed for "${char.name}" (non-blocking): ${dnaErr.message?.substring(0, 60)}`, "error");
+          }
+        } catch (e: any) {
+          addLog(`Image generation failed for ${char.name}: ${e.message?.substring(0, 80)}`, "error");
+        }
+      }
+      return `Generated ${generated}/${charsToGenerate.length} character images with identity locks.`;
+    } else if (name === 'generate_scene_assets') {
+      handleManifestAll();
+      return "Batch scene generation started.";
+    } else if (name === 'run_viral_analysis') {
+      if (!project.script) return "No script to analyze.";
+      handleNavigatePhase('post');
+      try {
+        const viralResult = await analyzeViralPotential(project.script, project.productionSeed);
+        setProject(p => ({ ...p, viralData: viralResult }));
+        setProject(p => markStepCompleted('post', 'run_viral_analysis', p));
+        addLog("Viral potential analysis complete.", "success");
+        return `Viral analysis done. Hook score: ${viralResult.hookScore}/10.`;
+      } catch (e: any) {
+        addLog("Viral analysis failed — try again from the Post phase.", "error");
+        return `Viral analysis failed: ${e.message}`;
+      }
     }
     return "Unknown tool.";
   };
@@ -600,20 +671,21 @@ const App: React.FC = () => {
   const handleAnalyze = async (script: string) => {
     if (!hasAuth) { await triggerApiKeySelection(); setHasAuth(true); return; }
     setProject(prev => ({ ...prev, status: 'analyzing', script }));
+    setAnalysisError(null);
     setAutoDiagnosisTriggered(false);
     addLog("Initializing production sequence analysis...", "system");
     try {
       const { characters, scenes, tasks, modules, metadata, lightingBrief } = await analyzeScript(script, project.productionSeed);
       const initialAssets: GeneratedAssets = {};
       scenes.forEach(s => initialAssets[s.id] = { status: 'pending', variants: [] });
-      setProject(prev => ({ ...prev, status: 'ready', characters, scenes, assets: initialAssets, tasks, modules, ...(lightingBrief ? { lightingBrief } : {}) }));
-      setYoutubeMetadata(metadata);
+      setProject(prev => ({ ...prev, status: 'ready', characters, scenes, assets: initialAssets, tasks, modules, youtubeMetadata: metadata, ...(lightingBrief ? { lightingBrief } : {}) }));
       addLog(`Analysis complete. Visual health: Calibrated.`, "success");
       setChatOpen(true);
     } catch (error: any) {
       const msg = error?.message || String(error);
       console.error('[handleAnalyze] Script analysis failed:', error);
       addLog(`Analysis failure: ${msg}`, "error");
+      setAnalysisError(msg);
       setProject(prev => ({ ...prev, status: prev.scenes.length > 0 ? 'ready' : 'idle' }));
     }
   };
@@ -1176,38 +1248,55 @@ const App: React.FC = () => {
   const handleExecuteWorkflowStep = async (stepId: string) => {
     console.log('Executing step:', stepId);
 
-    // Map step IDs to actual App functions
+    // Map step IDs to actual App functions; mark step complete in workflowProgress
     switch (stepId) {
       case 'analyze_script':
         if (project.script) await handleAnalyze(project.script);
-        break;
+        // handleAnalyze sets project state — step completion is auto-detected from scenes.length
+        return;
       case 'assign_voices':
-        // setView('characters') or open modal
-        // Assuming we have a way to open voice casting. For now:
-        setView('dashboard');
-        // trigger specific tab?
+        // Navigate to manifest tab (Cast section) where voices can be assigned
+        setSelectedStudioPhase('manifest');
         break;
       case 'generate_assets':
         await handleManifestAll();
-        break;
+        // Step completion is auto-detected from asset statuses
+        return;
       case 'set_key_art':
         setActiveModal({ type: 'asset_library' });
         break;
       case 'run_script_doctor':
         setActiveModal({ type: 'script_doctor' });
-        break;
+        setProject(p => markStepCompleted('genesis', 'run_script_doctor', p));
+        return;
       case 'run_continuity_audit':
         setActiveModal({ type: 'continuity_auditor' });
+        setProject(p => markStepCompleted('manifest', 'run_continuity_audit', p));
+        return;
+      case 'run_video_consistency_audit':
+        setActiveModal({ type: 'consistency_dashboard' });
         break;
-      case 'run_viral_analysis':
+      case 'run_viral_analysis': {
+        handleNavigatePhase('post');
+        if (project.script) {
+          try {
+            const viralResult = await analyzeViralPotential(project.script, project.productionSeed);
+            setProject(p => ({ ...p, viralData: viralResult }));
+            addLog("Viral potential analysis complete.", "success");
+          } catch (e) {
+            addLog("Viral analysis failed — try again from the Post phase.", "error");
+          }
+        }
+        setProject(p => markStepCompleted('post', 'run_viral_analysis', p));
+        return;
+      }
       case 'generate_seo_metadata':
-        setActiveModal({ type: 'manifest' });
+        handleNavigatePhase('post');
         break;
       case 'apply_vfx_mastering':
         setActiveModal({ type: 'vfx' });
         break;
       case 'add_moodboard':
-        // Scroll to moodboard
         handleNavigatePhase('genesis');
         break;
       case 'review_timeline':
@@ -1215,7 +1304,7 @@ const App: React.FC = () => {
         break;
     }
 
-    // Optimistically mark as completed for UI responsiveness
+    // Mark step completed in workflowProgress for the active phase
     setProject(p => markStepCompleted(activePhase, stepId, p));
   };
 
@@ -1245,7 +1334,7 @@ const App: React.FC = () => {
           break;
         case 'analyze_viral_potential':
         case 'generate_seo_metadata':
-          setActiveModal({ type: 'manifest' });
+          handleNavigatePhase('post');
           break;
         case 'open_director_chat':
           setChatOpen(true);
@@ -1443,9 +1532,10 @@ const App: React.FC = () => {
               <div className="xl:col-span-8">
                 <ScriptInput
                   script={project.script || ''}
-                  onScriptChange={(s) => setProject(p => ({ ...p, script: s }))}
+                  onScriptChange={(s) => { setProject(p => ({ ...p, script: s })); setAnalysisError(null); }}
                   onAnalyze={handleAnalyze}
                   isAnalyzing={project.status === 'analyzing'}
+                  analysisError={analysisError}
                 />
               </div>
               <div className="xl:col-span-4 flex flex-col gap-6">
@@ -1511,27 +1601,29 @@ const App: React.FC = () => {
                         <i className="fa-solid fa-stethoscope text-luna-gold"></i> Directorial Audit
                       </h4>
                       <div className="space-y-4">
+                        {/* Continuity Scan: meaningful only after character images exist */}
                         <button
-                          onClick={handleRunFullAudit}
-                          disabled={isBatchProcessing}
-                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-luna-gold/30 transition-all border border-white/5"
+                          onClick={() => {
+                            setActiveModal({ type: 'continuity_auditor' });
+                            setProject(p => markStepCompleted('manifest', 'run_continuity_audit', p));
+                          }}
+                          disabled={!project.characters.some(c => c.referenceImageBase64)}
+                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-luna-gold/30 transition-all border border-white/5 disabled:opacity-40"
+                          title={!project.characters.some(c => c.referenceImageBase64) ? 'Generate character images first' : undefined}
                         >
                           <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Run Continuity Scan</span>
                           <i className="fa-solid fa-chevron-right text-[10px] text-luna-gold transition-transform group-hover:translate-x-1"></i>
                         </button>
+                        {/* Narrative Diagnostic: script-level review, valid any time */}
                         <button
-                          onClick={() => setActiveModal({ type: 'script_doctor' })}
+                          onClick={() => {
+                            setActiveModal({ type: 'script_doctor' });
+                            setProject(p => markStepCompleted('genesis', 'run_script_doctor', p));
+                          }}
                           className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-solar-amber/30 transition-all border border-white/5"
                         >
                           <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Narrative Diagnostic</span>
                           <i className="fa-solid fa-chevron-right text-[10px] text-solar-amber transition-transform group-hover:translate-x-1"></i>
-                        </button>
-                        <button
-                          onClick={() => setActiveModal({ type: 'consistency_dashboard' })}
-                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-deep-sage/30 transition-all border border-white/5"
-                        >
-                          <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Consistency Dashboard</span>
-                          <i className="fa-solid fa-chevron-right text-[10px] text-deep-sage transition-transform group-hover:translate-x-1"></i>
                         </button>
                         <button
                           onClick={handleAssignShotList}
@@ -1600,6 +1692,18 @@ const App: React.FC = () => {
                           <i className="fa-solid fa-stop"></i> Cancel Batch
                         </button>
                       )}
+                      {/* Consistency Dashboard — post-synthesis character visual drift audit */}
+                      <button
+                        onClick={() => {
+                          setActiveModal({ type: 'consistency_dashboard' });
+                          setProject(p => markStepCompleted('synthesis', 'run_video_consistency_audit', p));
+                        }}
+                        disabled={batchCompletedCount === 0}
+                        title={batchCompletedCount === 0 ? 'Generate scenes first' : 'Audit character visual consistency across generated scenes'}
+                        className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-deep-sage border border-white/5 hover:text-white transition-all shadow-xl disabled:opacity-40"
+                      >
+                        <i className="fa-solid fa-eye"></i>
+                      </button>
                       <button onClick={() => setActiveModal({ type: 'audio_mixer' })} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
                         <i className="fa-solid fa-sliders"></i>
                       </button>
@@ -1675,9 +1779,9 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {youtubeMetadata && (
+            {project.youtubeMetadata && (
               <YouTubeOptimizer
-                metadata={youtubeMetadata}
+                metadata={project.youtubeMetadata}
                 script={project.script}
                 characters={project.characters}
                 globalStyle={project.globalStyle || "Cinematic"}
@@ -1717,94 +1821,51 @@ const App: React.FC = () => {
       </div>{/* end main content */}
 
       {/* ── PERSISTENT DIRECTOR SIDEBAR ─────────────────────────────────── */}
-      <aside
-        className="fixed right-0 top-0 bottom-0 z-[150] flex flex-col pt-20 pb-0 transition-all duration-300 ease-in-out"
-        style={{
-          width: chatOpen ? '420px' : '52px',
-          background: '#0a0e1a',
-          borderLeft: chatOpen ? '1px solid rgba(0,212,255,0.12)' : '1px solid rgba(255,255,255,0.04)',
-          boxShadow: chatOpen ? '-4px 0 40px rgba(0,0,0,0.6)' : 'none',
-        }}
-      >
-        {/* Collapsed strip */}
-        {!chatOpen && (
-          <div className="flex flex-col items-center gap-4 pt-4 h-full overflow-hidden">
-            <button
-              onClick={() => setChatOpen(true)}
-              className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110"
-              style={{ background: 'rgba(0,212,255,0.08)', border: '1px solid rgba(0,212,255,0.2)' }}
-              title="Open Director"
-            >
-              <i className="fa-solid fa-brain text-[12px]" style={{ color: '#00d4ff' }}></i>
-            </button>
-            <div
-              className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{ background: phaseColors[activePhase], boxShadow: `0 0 6px ${phaseColors[activePhase]}` }}
-              title={`Phase: ${activePhase}`}
-            ></div>
-            <div
-              className="mt-auto mb-6 text-[7px] font-black uppercase tracking-[0.3em] opacity-30 flex-shrink-0"
-              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: '#a1a1aa' }}
-            >Director</div>
-          </div>
-        )}
-
-        {/* Expanded panel */}
-        {chatOpen && (
-          <div className="flex-1 min-h-0 flex flex-col">
-            <ErrorBoundary>
-              <DirectorAssistant
-                project={project}
-                onUpdateProject={(updates) => setProject(prev => ({ ...prev, ...updates }))}
-                onExecuteTool={handleToolExecution}
-                autoTriggerDiagnosis={autoDiagnosisTriggered}
-                currentPhase={activePhase}
-                onExecuteWorkflowStep={handleExecuteWorkflowStep}
-                onSkipWorkflowStep={handleSkipWorkflowStep}
-                pendingInjection={directorInjection}
-                onClearInjection={() => setDirectorInjection(null)}
-                onOpenTool={(toolId) => {
-                  switch (toolId) {
-                    case 'script-doctor': setActiveModal({ type: 'script_doctor' }); break;
-                    case 'continuity-auditor': setActiveModal({ type: 'continuity_auditor' }); break;
-                    case 'vfx-master': setActiveModal({ type: 'vfx' }); break;
-                    case 'audio-mixer': setActiveModal({ type: 'audio_mixer' }); break;
-                    case 'youtube-optimizer': setActiveModal({ type: 'manifest' }); break;
-                    case 'moodboard': setSelectedStudioPhase('genesis'); break;
-                  }
-                }}
-              />
-            </ErrorBoundary>
-
-            {/* Mini production log */}
-            <div className="nm-panel p-4 rounded-none border-t border-white/5 flex flex-col gap-3 bg-black/40 flex-shrink-0">
-              <div className="flex items-center justify-between">
-                <h3 className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.3em] flex items-center gap-2">
-                  <i className="fa-solid fa-terminal text-luna-gold text-[8px]"></i> Live Console
-                </h3>
-                <span className="text-[6px] font-mono text-mystic-gray opacity-30">SIGNAL_M_001</span>
-              </div>
-              <div className="space-y-1.5 max-h-28 overflow-y-auto scrollbar-hide">
-                {project.productionLog.slice(0, 5).map(log => (
-                  <div key={log.id} className="text-[7px] font-mono flex gap-2 leading-relaxed">
-                    <span className="text-mystic-gray opacity-40 shrink-0 w-10">{new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' })}</span>
-                    <span className={`truncate ${log.type === 'error' ? 'text-solar-amber' : log.type === 'ai_suggestion' ? 'text-luna-gold' : 'text-celestial-stone'}`}>
-                      {log.message}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <button
-              onClick={() => setChatOpen(false)}
-              className="absolute top-24 right-3 w-8 h-8 nm-button rounded-full flex items-center justify-center text-mystic-gray hover:text-white transition-all border border-white/5 text-[10px]"
-            >
-              <i className="fa-solid fa-chevron-right"></i>
-            </button>
-          </div>
-        )}
-      </aside>
+      <ErrorBoundary>
+        <DirectorSidebar
+          isOpen={chatOpen}
+          onToggle={() => setChatOpen(prev => !prev)}
+          currentPhase={activePhase}
+          project={project}
+          onExecuteTool={handleToolExecution}
+          productionLog={project.productionLog}
+          pendingInjection={directorInjection}
+          onClearInjection={() => setDirectorInjection(null)}
+          onGenerateCharacters={async () => {
+            const charsToGenerate = project.characters.filter(c => !c.referenceImageBase64);
+            for (const char of charsToGenerate) {
+              try {
+                const img = await generateCharacterImage(char, resolution, project.globalStyle || 'Cinematic', project.productionSeed);
+                // Commit image and mark as approved so DNA synthesis is unlocked
+                setProject(prev => ({
+                  ...prev,
+                  characters: prev.characters.map(c => c.id === char.id
+                    ? { ...c, referenceImageBase64: img, referenceImageApproved: true }
+                    : c)
+                }));
+                addLog(`Generated image for ${char.name}. Synthesizing identity lock...`, 'success');
+                // Synthesize CharacterDNA to lock the visual identity for cross-scene consistency
+                try {
+                  const charWithImage = { ...char, referenceImageBase64: img, referenceImageApproved: true as const };
+                  const dna = await synthesizeCharacterDNA(charWithImage, project.globalStyle || 'Cinematic', project.productionSeed);
+                  setProject(prev => ({
+                    ...prev,
+                    characters: prev.characters.map(c => c.id === char.id ? { ...c, characterDNA: dna } : c)
+                  }));
+                  addLog(`Character DNA locked for "${char.name}". Cross-scene consistency active.`, 'success');
+                } catch (dnaErr: any) {
+                  addLog(`DNA synthesis failed for "${char.name}" (non-blocking): ${dnaErr.message?.substring(0, 60)}`, 'error');
+                }
+              } catch (e: any) {
+                addLog(`Image generation failed for ${char.name}: ${e.message?.substring(0, 80)}`, 'error');
+              }
+            }
+          }}
+          onGenerateScenes={async () => {
+            await handleManifestAll();
+          }}
+        />
+      </ErrorBoundary>
 
       {/* ── QUALITY GATE MODAL (top-level, not inside aside) ─────────────── */}
       <QualityGateModal
@@ -1826,6 +1887,9 @@ const App: React.FC = () => {
       />
 
       {/* ── MODALS (single activeModal slot) ─────────────────────────────── */}
+      {/* Each lazy modal gets its own Suspense so a first-load chunk fetch
+          doesn't replace the entire main content with the loading spinner. */}
+      <Suspense fallback={null}>
       {editingCharacter && (
         <CharacterModal
           character={editingCharacter}
@@ -1857,7 +1921,7 @@ const App: React.FC = () => {
       {activeModal?.type === 'continuity_auditor' && (
         <ContinuityAuditor
           project={project}
-          onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => (s.charactersInScene || []).includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))}
+          onSyncPrompts={(id, prompt) => setProject(p => { const charName = p.characters.find(c => c.id === id)?.name; if (!charName) return p; return { ...p, scenes: p.scenes.map(s => (s.charactersInScene || []).includes(charName) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }; })}
           onMarkScenesForRegeneration={handleMarkScenesForRegeneration}
           onClose={closeModal}
         />
@@ -1889,7 +1953,7 @@ const App: React.FC = () => {
         />
       )}
       {activeModal?.type === 'manifest' && (
-        <ProductionManifest project={project} youtubeMetadata={youtubeMetadata} onClose={closeModal} />
+        <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata} onClose={closeModal} />
       )}
       {activeModal?.type === 'player' && (
         <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={closeModal} />
@@ -1975,7 +2039,8 @@ const App: React.FC = () => {
         </div>
       )}
 
-      </Suspense>
+      </Suspense>{/* end modal Suspense */}
+      </Suspense>{/* end main content Suspense */}
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} />
     </Layout>
   );

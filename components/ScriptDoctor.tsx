@@ -26,7 +26,7 @@ export const ScriptDoctor: React.FC<ScriptDoctorProps> = ({ project, onClose }) 
 
   return (
     <div className="fixed inset-0 z-[400] bg-black/95 backdrop-blur-3xl flex items-center justify-center p-6 animate-in fade-in duration-500">
-      <div className="w-full max-w-4xl nm-panel flex flex-col overflow-hidden border border-white/5 bg-eclipse-black">
+      <div className="w-full max-w-4xl max-h-[90vh] nm-panel flex flex-col overflow-hidden border border-white/5 bg-eclipse-black">
         <header className="p-8 border-b border-white/5 flex justify-between items-center bg-gold-gradient/5">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-solar-amber/10 border border-solar-amber/30 flex items-center justify-center text-solar-amber">

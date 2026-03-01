@@ -38,19 +38,31 @@ export async function renderMP4(frames: string[], options: RenderOptions): Promi
       await writeFile(framePath, Buffer.from(frames[i], 'base64'));
     }
 
-    // Run FFmpeg
+    // Run FFmpeg with broadcast-quality settings
     await new Promise<void>((resolve, reject) => {
       const scale = options.resolution === '1080p' ? 1920 : 1280;
+      const outputOptions = options.format === 'mp4'
+        ? [
+            '-crf 16',
+            '-preset slow',       // Better compression quality — broadcast standard
+            '-pix_fmt yuv420p',
+            '-movflags +faststart',
+            `-vf scale=${scale}:-2`,
+            '-c:a aac',           // AAC audio — broadcast standard
+            '-ar 48000',          // 48kHz sample rate
+            '-b:a 192k',          // 192kbps audio bitrate
+          ]
+        : [
+            '-crf 16',
+            '-pix_fmt yuv420p',
+            '-b:v 40M',           // 40Mbps for WebM output
+            `-vf scale=${scale}:-2`,
+          ];
       ffmpeg()
         .input(path.join(tmpDir, 'frame_%06d.png'))
         .inputFPS(options.fps)
         .videoCodec(options.format === 'mp4' ? 'libx264' : 'libvpx-vp9')
-        .outputOptions([
-          '-crf 18',
-          '-pix_fmt yuv420p',
-          '-movflags +faststart',
-          `-vf scale=${scale}:-2`,
-        ])
+        .outputOptions(outputOptions)
         .output(outputPath)
         .on('end', resolve)
         .on('error', reject)

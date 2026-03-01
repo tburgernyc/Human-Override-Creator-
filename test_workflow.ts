@@ -102,7 +102,7 @@ async function runComprehensiveTest() {
     );
     const imgDuration = ((Date.now() - imgStartTime) / 1000).toFixed(2);
     console.log(`  ✅ Scene image generated in ${imgDuration}s`);
-    console.log(`     - Image size: ${(sceneImage.length / 1024).toFixed(1)} KB`);
+    console.log(`     - Image size: ${(sceneImage.imageUrl.length / 1024).toFixed(1)} KB`);
 
     // Test Video Generation (optional - can be slow)
     const TEST_VIDEO = process.env.TEST_VIDEO === 'true';
@@ -110,7 +110,7 @@ async function runComprehensiveTest() {
       console.log('\n  3b. Generating scene video...');
       const vidStartTime = Date.now();
       const sceneVideo = await generateSceneVideo(
-        sceneImage,
+        sceneImage.imageUrl,
         testScene.visualPrompt,
         AspectRatio.LANDSCAPE,
         Resolution.HD,
