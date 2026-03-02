@@ -5,10 +5,20 @@ import { MODEL_NAMES, VOICE_PRESETS, VoicePreset } from "../constants";
 import { Character, CharacterDNA, CharacterPhysical, Scene, DialogueLine, AspectRatio, Resolution, ProjectState, ProductionTask, ProjectModules, ViralPotential, DirectorDraft, ShotType, LightingBrief } from "../types";
 import { getCachedAsset, cacheAsset } from "./assetCache";
 
-// Proxy URL for secure server-side API calls
-const PROXY_URL = (typeof window !== 'undefined' && window.location.hostname !== 'localhost')
-  ? `${window.location.origin}`
-  : 'http://localhost:3001';
+// Proxy URL for secure server-side API calls.
+// In the browser we always use the current origin so requests go through
+// Vite's /api proxy — which reads PROXY_PORT from .env and forwards to the
+// correct port.  Hardcoding port 3001 here broke local dev whenever
+// PROXY_PORT was set to anything other than 3001.
+// In Node.js (tests) we read PROXY_PORT from the environment directly.
+const PROXY_URL = (() => {
+  if (typeof window !== 'undefined') {
+    return window.location.origin; // browser — Vite proxy handles port mapping
+  }
+  // Node.js / SSR context
+  const port = (typeof process !== 'undefined' && process?.env?.PROXY_PORT) || '3001';
+  return `http://localhost:${port}`;
+})();
 
 const cleanJsonResponse = (text: string): string => {
   let clean = text.trim();
