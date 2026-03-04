@@ -109,6 +109,8 @@ export interface Scene {
   dominantEmotion?: 'tense' | 'hopeful' | 'melancholic' | 'triumphant' | 'mysterious' | 'procedural' | 'interrogative' | 'ominous' | 'revelatory' | 'neutral';
   suggestedColorPalette?: string[];  // Hex codes for scene color intent
   paceRating?: 'slow_burn' | 'moderate' | 'intense';
+  // Master Clock: actual TTS audio duration in seconds — timing authority for video generation (Task 6)
+  masterClockDuration?: number;
 }
 
 export interface DialogueLine {

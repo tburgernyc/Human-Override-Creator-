@@ -133,10 +133,11 @@ export const getCachedAsset = async (
   style: string,
   resolution: string,
   aspectRatio: string,
-  seed: number
+  seed: number,
+  charDnaHash?: string
 ): Promise<string | null> => {
   try {
-    const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString());
+    const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString(), charDnaHash || '');
     const entry = await dbGet(hash);
     if (entry) {
       console.log(`[AssetCache] HIT ${hash}`);
@@ -158,15 +159,16 @@ export const cacheAsset = async (
   style: string,
   resolution: string,
   aspectRatio: string,
-  seed: number
+  seed: number,
+  charDnaHash?: string
 ): Promise<void> => {
   try {
-    const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString());
+    const hash = hashKey(visualPrompt, style, resolution, aspectRatio, seed.toString(), charDnaHash || '');
     const size = estimateSize(assetUrl);
     await dbPut({ hash, assetUrl, timestamp: Date.now(), size });
     console.log(`[AssetCache] Cached ${hash} (${(size / 1024).toFixed(1)} KB)`);
     // Evict async — don't block caller
-    dbGetAll().then(evictIfNeeded).catch(() => {});
+    dbGetAll().then(evictIfNeeded).catch(() => { });
   } catch (e) {
     console.warn('[AssetCache] cacheAsset error:', e);
   }

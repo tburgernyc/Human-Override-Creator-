@@ -456,31 +456,54 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
       role: 'user', parts: [
         ...(sceneImages || []).map(img => ({ inlineData: { mimeType: 'image/png' as const, data: img.split(',')[1] } })),
         {
-          // OPT-03: Compressed project context — strips redundant fields to cut ~1,500–2,000 tokens per call
+          // OPT-03 + Task 8: Phase-aware context injection — only sends data relevant to the current phase
           text: `CURRENT_PHASE: ${phase.toUpperCase()}
 PHASE_PROGRESS: ${phase === 'genesis' ? (currentProject.script ? 'Script entered, not yet analyzed' : 'No script yet') : phase === 'manifest' ? `${totalScenes} scenes, ${currentProject.characters.length} characters, 0/${totalScenes} assets` : `${completedAssets}/${totalScenes} assets complete`}
-PROJECT_CONTEXT: ${JSON.stringify({
-            scenes: currentProject.scenes.map(s => ({
-              id: s.id,
-              desc: s.description?.substring(0, 60),
-              // OPT-03: Truncate narrator lines — 3 lines max, 40 chars each (was 80 chars, all lines)
-              narratorLines: s.narratorLines?.slice(0, 3).map(l => ({ speaker: l.speaker, text: l.text.substring(0, 40) })),
-            })),
-            // OPT-03: Characters → compact summary (no full description/visualPrompt — Director uses tool calls to get those when needed)
-            characters: currentProject.characters.map(c => ({
-              name: c.name, gender: c.gender,
-              voiceId: c.voiceId || 'UNASSIGNED',
-              hasDNA: !!c.characterDNA,
-            })),
-            // OPT-10: Omit voice list when all voices are already assigned — saves ~300 tokens
-            ...(needsVoiceAssignment ? {
-              available_voices: VOICE_PRESETS
-                .filter((v, i, arr) => arr.findIndex(x => x.apiVoiceName === v.apiVoiceName) === i)
-                .map(v => `${v.id}:${v.gender}`),
-            } : {}),
-            style: currentProject.globalStyle,
-            assets: Object.keys(currentProject.assets).length,
-          })}\n\nUSER_MESSAGE: ${message}`
+PROJECT_CONTEXT: ${JSON.stringify((() => {
+            // Phase-scoped context — send only what the Director needs for the current phase
+            const base = { style: currentProject.globalStyle, phase };
+            switch (phase) {
+              case 'genesis':
+                return { ...base, script: currentProject.script?.substring(0, 500) || 'none' };
+              case 'manifest':
+                return {
+                  ...base,
+                  characters: currentProject.characters.map(c => ({
+                    name: c.name, gender: c.gender,
+                    voiceId: c.voiceId || 'UNASSIGNED',
+                    hasDNA: !!c.characterDNA,
+                  })),
+                  sceneCount: totalScenes,
+                  // OPT-10: Omit voice list when all voices are already assigned
+                  ...(needsVoiceAssignment ? {
+                    available_voices: VOICE_PRESETS
+                      .filter((v, i, arr) => arr.findIndex(x => x.apiVoiceName === v.apiVoiceName) === i)
+                      .map(v => `${v.id}:${v.gender}`),
+                  } : {}),
+                };
+              case 'synthesis':
+                return {
+                  ...base,
+                  scenes: currentProject.scenes.map(s => ({
+                    id: s.id,
+                    desc: s.description?.substring(0, 60),
+                    narratorLines: s.narratorLines?.slice(0, 3).map(l => ({ speaker: l.speaker, text: l.text.substring(0, 40) })),
+                  })),
+                  characters: currentProject.characters.map(c => ({ name: c.name, hasDNA: !!c.characterDNA })),
+                  assets: Object.keys(currentProject.assets).length,
+                };
+              case 'post':
+              default:
+                return {
+                  ...base,
+                  assets: Object.keys(currentProject.assets).length,
+                  totalScenes,
+                  complete: completedAssets === totalScenes,
+                };
+            }
+          })())}
+
+USER_MESSAGE: ${message}`
         }]
     }
   ] as any;
@@ -1139,9 +1162,14 @@ export const generateSceneImage = async (
 ): Promise<{ imageUrl: string; seedUsed: number }> => {
   const effectiveSeed = seed ?? Math.floor(Math.random() * 2147483647);
 
+  // Cache key includes CharacterDNA to invalidate when character appearance changes (Task 9)
+  const sceneCharNames = scene.charactersInScene || [];
+  const sceneChars = characters.filter(c => sceneCharNames.includes(c.name));
+  const charDnaHash = sceneChars.map(c => buildCanonicalPrompt(c)).join('|');
+
   // Check cache first (only if no feedback)
   if (!feedback) {
-    const cached = await getCachedAsset(scene.visualPrompt, style, resolution, aspectRatio, effectiveSeed);
+    const cached = await getCachedAsset(scene.visualPrompt, style, resolution, aspectRatio, effectiveSeed, charDnaHash);
     if (cached) return { imageUrl: cached, seedUsed: effectiveSeed };
   }
 
@@ -1210,7 +1238,7 @@ export const generateSceneImage = async (
     const imageUrl = `data:image/png;base64,${data}`;
 
     if (!feedback) {
-      await cacheAsset(imageUrl, scene.visualPrompt, style, resolution, aspectRatio, effectiveSeed);
+      await cacheAsset(imageUrl, scene.visualPrompt, style, resolution, aspectRatio, effectiveSeed, charDnaHash);
     }
 
     return { imageUrl, seedUsed: effectiveSeed };
@@ -1399,31 +1427,42 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
   let failureCount = 0;
   const sceneMoodPrefix = scene?.dominantEmotion ? (SCENE_EMOTION_PREFIX[scene.dominantEmotion] || '') : '';
 
-  // Group consecutive lines by speaker pairs for batch processing
+  // Task 10: Scene-level TTS batching — if entire scene has ≤2 speakers, send all lines as one batch
+  const nonEmptyLines = lines.filter(l => l.text.trim());
+  const uniqueSpeakers = new Set(nonEmptyLines.map(l => l.speaker));
+
   const batches: { lines: DialogueLine[], speakers: string[] }[] = [];
-  let currentBatch: DialogueLine[] = [];
-  let currentSpeakers = new Set<string>();
 
-  for (const line of lines) {
-    if (!line.text.trim()) continue;
+  if (uniqueSpeakers.size <= 2 && nonEmptyLines.length > 1) {
+    // Scene-level batch: all lines in one API call
+    batches.push({ lines: nonEmptyLines, speakers: Array.from(uniqueSpeakers) });
+    console.log(`[generateSceneAudio] Scene-level batch: ${nonEmptyLines.length} lines, ${uniqueSpeakers.size} speakers`);
+  } else {
+    // Fallback: group consecutive lines by speaker pairs for batch processing
+    let currentBatch: DialogueLine[] = [];
+    let currentSpeakers = new Set<string>();
 
-    const lineSpeakers = new Set([...currentSpeakers, line.speaker]);
+    for (const line of lines) {
+      if (!line.text.trim()) continue;
 
-    // If adding this line would exceed 2 speakers, start new batch
-    if (lineSpeakers.size > 2 && currentBatch.length > 0) {
-      batches.push({ lines: currentBatch, speakers: Array.from(currentSpeakers) });
-      currentBatch = [line];
-      currentSpeakers = new Set([line.speaker]);
-    } else {
-      currentBatch.push(line);
-      currentSpeakers = lineSpeakers;
+      const lineSpeakers = new Set([...currentSpeakers, line.speaker]);
+
+      // If adding this line would exceed 2 speakers, start new batch
+      if (lineSpeakers.size > 2 && currentBatch.length > 0) {
+        batches.push({ lines: currentBatch, speakers: Array.from(currentSpeakers) });
+        currentBatch = [line];
+        currentSpeakers = new Set([line.speaker]);
+      } else {
+        currentBatch.push(line);
+        currentSpeakers = lineSpeakers;
+      }
     }
-  }
 
-  // Add final batch
-  if (currentBatch.length > 0) {
-    batches.push({ lines: currentBatch, speakers: Array.from(currentSpeakers) });
-  }
+    // Add final batch
+    if (currentBatch.length > 0) {
+      batches.push({ lines: currentBatch, speakers: Array.from(currentSpeakers) });
+    }
+  } // end scene-level batch check
 
   // Process each batch
   for (const batch of batches) {
