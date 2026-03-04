@@ -41,7 +41,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Proxy all Gemini API requests — the key is injected server-side
-app.all('/api/gemini/*', async (req: any, res) => {
+app.all(/^\/api\/gemini\/(.*)/, async (req: any, res) => {
     try {
         const targetPath = req.params[0];
         const baseUrl = 'https://generativelanguage.googleapis.com';
