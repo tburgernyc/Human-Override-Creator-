@@ -183,11 +183,7 @@ const retryWithBackoff = async <T>(
 };
 
 const OVERRIDE_BOT_SYSTEM_INSTRUCTION = `
-Act as OverrideBot, a PROACTIVE AI Director & workflow orchestrator for the Human Override Video Creation Tool.
-
-CORE DIRECTIVE: You are an active production partner. Don't wait for user questions — lead the workflow.
-
-ROLE: Executive Producer + Story Editor + Workflow Manager
+ROLE: You are the Lead Technical Director and Quality Auditor for the Human Override Creator production suite. Your primary function is to transform a script into a high-fidelity cinematic video by managing a multi-agent AI pipeline. You do not just execute; you discern.
 
 PRODUCTION PHASES:
 1. GENESIS: Script writing and initial setup
@@ -195,65 +191,55 @@ PRODUCTION PHASES:
 3. SYNTHESIS: Asset generation (images, video, audio)
 4. POST: Final mastering, VFX, metadata, and distribution
 
-PROACTIVE BEHAVIORS (CRITICAL):
-1. WORKFLOW ORCHESTRATION: Guide users step-by-step through phases
-   - Always state current phase and completion percentage
-   - Suggest the next logical step with one-click execution
-   - Prevent phase transitions if critical quality gates fail
+1. THE DISCERNING EYE (Input Auditing)
+You must ensure all inputs to generative components are of the highest technical quality.
+Prompt Sanitization: Automatically strip subjective or low-value descriptors (e.g. "stunning," "beautiful," "hyper-realistic") from any generative request. Replace generic adjectives with technical lens and lighting specifications (e.g. "35mm film grain," "Available-light aesthetic," "Rec.709 color science").
+DNA Enforcement: You are the guardian of CharacterDNA. Every visual prompt involving a character must include their immutable physical anchor.
 
-2. QUALITY GATING: Check completeness before allowing progression
-   - Genesis: Script analyzed? Scenes extracted?
-   - Manifest: All characters voiced? Scene pacing reviewed?
-   - Synthesis: Assets generated? Quality approved?
-   - Post: VFX applied? Metadata optimized?
+2. THE QUALITY GATEKEEPER (Output Auditing)
+You are authorized to reject any output that fails to meet professional standards.
+Fidelity Gate: After an image is generated, perform a vision-based audit comparing the result to the Master Reference. If character drift, facial warping, or lighting inconsistency exceeds a 10% variance, trigger automatic regeneration.
+Density Gate: Audit visual pacing. If the sequence contains three consecutive Medium Shots, override the next scene's framing to Macro or Extreme Close-Up (ECU) to maintain tension.
+Tone Gate: Ensure all narration and dialogue avoid "influencer" inflections. Demand clinical, unhurried, forensic delivery.
 
-3. TOOL ADVOCACY: Proactively suggest optimization tools when relevant
-   - "I notice you haven't run a Continuity Audit. Let me check character consistency across scenes."
-   - "Your viral potential is untested. Shall I run a retention analysis to optimize hook strength?"
-   - "Scene generation complete! Let's apply cinematic mastering effects in VFX Master."
+3. ORCHESTRATION LOGIC (The Professional Workflow)
+Enforce this order of execution to maximize quality and minimize A/V drift:
+Step 1 — Narrative and Logic Audit: Verify the script includes specific detail for all system decisions.
+Step 2 — Audio-Led Temporal Locking: Generate TTS/Audio first. Capture the actualAudioDuration to create the Master Clock for the project.
+Step 3 — Visual DNA Synthesis: Lock the Pixel-Level Master Reference for all characters and environments before moving to motion.
+Step 4 — Generative Manifestation: Command the visual pipeline to generate motion that matches the Master Clock duration exactly, using only cinematic camera movements (Pans, Tilts, Zooms).
+Step 5 — Forensic Mastering: Ensure System UI elements are layered as high-definition, non-baked overlays and that the final audio includes ambient system tone.
 
-4. PROGRESS MONITORING: Track workflow completion and prompt next steps
-   - "You've completed 60% of Manifest phase. Next: review scene pacing in the Timeline."
-   - "All scenes generated! Time to master your final cut with VFX and audio mixing."
-
-5. ONE-CLICK EXECUTION: Offer to execute actions immediately
-   - "I can batch-generate all 7 remaining scenes. Approve?"
-   - "Shall I assign optimal voices to all characters now?"
-   - "Let me run a full narrative audit with Script Doctor."
-
-INTERVENTION TIMING:
-- Script analysis complete → Review cast and suggest voice assignments
-- First asset generated → Celebrate + suggest Key Art selection
-- User idle 5+ min → Prompt next logical step
-- Before phase transition → Run quality checks
-- Failures occur → Offer concrete fixes
-- Batch complete → Celebrate + suggest next phase
+4. DISCERNING PROTOCOLS (Action Matrix)
+Character Drift detected → HALT. Re-generate with locked seed and seed-reference.
+Visual Stagnation (3x Medium Shot) → INJECT. Force Macro/ECU framing on next shot.
+A/V Sync Mismatch → TRIM. Force FFmpeg to conform video to the Master Clock.
+Glamour/Fantasy Visuals → REPLACE. Inject "Forensic Naturalism" descriptors into the prompt.
 
 COMMUNICATION STYLE (MANDATORY):
-- Write in plain, direct sentences only. No bullet headers, no lettered sections (A/B/C/D/E), no labeled prefixes of any kind.
-- Do NOT use emojis in any message, ever.
-- Keep responses to 1-3 sentences unless you are generating deliverable content (scripts, prompts, metadata, etc.).
-- Lead decisively: tell the user exactly what to do next and why it matters. You are the expert; they are following your direction.
-- When celebrating a milestone, do it in one sentence then immediately direct to the next action.
+Write in plain, direct sentences only. No bullet headers, no lettered sections, no labeled prefixes.
+Do NOT use emojis in any message, ever.
+Keep responses to 1-3 sentences unless generating deliverable content.
+Lead decisively: tell the user exactly what to do next and why it matters.
+When celebrating a milestone, do it in one sentence then immediately direct to the next action.
 
 PRINCIPLES:
 1. Action-first: Always end with a clear next step.
 2. Quality-focused: Flag issues before the user proceeds to the next phase.
-3. Tool advocate: Mention relevant tools when they will genuinely help.
-4. Continuity-aware: Preserve project tone and character consistency.
-5. Phase-aware: Know exactly where the user is and where they should go next.
-6. Minimize friction: Make it easy to act on your suggestions.
+3. DNA guardian: Enforce character consistency across every generation call.
+4. Phase-aware: Know exactly where the user is and where they should go next.
+5. Forensic tone: Maintain clinical, naturalistic, documentary-grade output at all times.
 
-STYLE: Decisive, cinematic, expert. Use imperative mood ("Run the audit", "Generate scenes", "Apply VFX"). Be direct — the user depends on you to drive the production forward.
+STYLE: Decisive, forensic, authoritative. Use imperative mood. Be direct — the user depends on you to drive the production forward.
 
-AGENTIC CAPABILITIES — YOU CAN NOW TAKE THESE ACTIONS DIRECTLY:
+AGENTIC CAPABILITIES — YOU CAN TAKE THESE ACTIONS DIRECTLY:
 - reformat_script: When the user has a raw, unformatted script, call this to structure it. Suggest this proactively after any script paste.
 - optimize_character_prompt: When a character's visualPrompt is vague (<50 words) or lacks technical detail, call this to upgrade it. Suggest for ALL characters before synthesis.
 - apply_lighting_brief: When no lighting brief exists but a style and script are present, call this to establish cinematic lighting.
 - run_video_consistency_audit: After scenes are generated, proactively offer this. If character inconsistencies are found, offer mark_for_regeneration=true.
 
 STEP-BY-STEP CO-PILOT PROTOCOL:
-- When a user enters a script, immediately: (1) check format, (2) offer reformat_script if needed, (3) identify characters, (4) suggest analyzeScript
+- When a user enters a script: (1) check format, (2) offer reformat_script if needed, (3) identify characters, (4) suggest analyzeScript
 - When characters exist without CharacterDNA, flag them for synthesis
 - When characters exist without optimized prompts, offer optimize_character_prompt
 - When no lightingBrief exists, offer apply_lighting_brief
@@ -865,13 +851,13 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
-                properties: { speaker: { type: Type.STRING }, text: { type: Type.STRING }, emotion: { type: Type.STRING, enum: ['neutral', 'excited', 'whispered', 'serious', 'shouting', 'empathetic', 'sarcastic'] } },
+                properties: { speaker: { type: Type.STRING }, text: { type: Type.STRING }, emotion: { type: Type.STRING, enum: ['neutral', 'excited', 'whispered', 'serious', 'shouting', 'empathetic', 'sarcastic', 'clinical', 'analytical', 'ominous', 'accusatory', 'measured', 'revelatory'] } },
                 required: ["speaker", "text"]
               }
             },
             estimatedDuration: { type: Type.NUMBER },
             emotionalBeat: { type: Type.STRING, enum: ['setup', 'confrontation', 'climax', 'resolution', 'transition'] },
-            dominantEmotion: { type: Type.STRING, enum: ['tense', 'hopeful', 'melancholic', 'triumphant', 'mysterious', 'neutral'] },
+            dominantEmotion: { type: Type.STRING, enum: ['tense', 'hopeful', 'melancholic', 'triumphant', 'mysterious', 'procedural', 'interrogative', 'ominous', 'revelatory', 'neutral'] },
             suggestedColorPalette: { type: Type.ARRAY, items: { type: Type.STRING } },
             paceRating: { type: Type.STRING, enum: ['slow_burn', 'moderate', 'intense'] },
           },
@@ -1103,6 +1089,14 @@ IMPORTANT: Ensure all arrays and objects are properly closed. Do not truncate th
   };
 };
 
+// ─── Prompt Sanitization (Task 2) ────────────────────────────────────────────
+const STRIP_WORDS = /\b(stunning|beautiful|gorgeous|hyper-realistic|breathtaking|epic|amazing|incredible|spectacular|masterpiece|perfect|flawless)\b/gi;
+const FORENSIC_SUFFIX = '35mm film grain. Available-light aesthetic. Rec.709 color science. Naturalistic skin texture.';
+
+function sanitizePrompt(prompt: string): string {
+  return prompt.replace(STRIP_WORDS, '').replace(/\s{2,}/g, ' ').trim() + ' ' + FORENSIC_SUFFIX;
+}
+
 export const generateCharacterImage = async (character: Character, resolution: Resolution, style: string, seed?: number): Promise<string> => {
   return retryWithBackoff(async () => {
     const ai = await getAIClient();
@@ -1199,10 +1193,11 @@ export const generateSceneImage = async (
       ? `CHARACTERS PRESENT — ${charDescriptions}. Maintain these exact physical descriptions. `
       : '';
 
-    const avoidance = 'Avoid: cartoon style, watercolor, illustration, sketch, drawing, anime, 3D render artifact, low resolution, blurry, overexposed, underexposed, flat lighting, symmetrical composition, logo, text, watermark, signature, visible AI artifacts, deformed hands, extra limbs, distorted face.';
+    const avoidance = 'Avoid: cartoon style, watercolor, illustration, sketch, drawing, anime, 3D render artifact, low resolution, blurry, overexposed, underexposed, flat lighting, symmetrical composition, logo, text, watermark, signature, visible AI artifacts, deformed hands, extra limbs, distorted face, beauty filter, glamour lighting, soft-focus, ethereal glow, fantasy elements, HDR tonemapping, hyper-saturated color, airbrushed skin, three-point beauty lighting, digital painting aesthetic, stock photo composition, symmetrical posing.';
     const emotionNote = scene.dominantEmotion ? `Emotional tone: ${scene.dominantEmotion}. ` : '';
     const paletteNote = scene.suggestedColorPalette?.length ? `Scene color palette: ${scene.suggestedColorPalette.join(', ')}. ` : '';
-    parts.push({ text: `${shotDirection} ${lightingPrefix}${charContext}${emotionNote}${paletteNote}VISUAL STYLE: ${style}. SCENE: ${scene.visualPrompt}. ${feedback ? `DIRECTOR FEEDBACK: ${feedback}.` : ''} Ultra-detailed cinematic composition, 8K photorealistic rendering, sharp focus, volumetric lighting, professional color grading. Shot on ARRI Alexa with anamorphic lens. Consistent character appearances across all scenes. ${avoidance}` });
+    const sanitizedVisualPrompt = sanitizePrompt(scene.visualPrompt);
+    parts.push({ text: `${shotDirection} ${lightingPrefix}${charContext}${emotionNote}${paletteNote}VISUAL STYLE: ${style}. SCENE: ${sanitizedVisualPrompt}. ${feedback ? `DIRECTOR FEEDBACK: ${feedback}.` : ''} Forensic documentary realism. 35mm film grain. Available-light aesthetic. No beauty lighting. Naturalistic color science, Rec.709 compliant. Skin texture visible at 4K — pores, imperfections, sweat. No airbrushing. Harsh shadows with naturalistic fall-off. Shot on ARRI Alexa Mini with Cooke S4 primes. No lens flare. No ethereal glow. No HDR tonemapping. Consistent character appearances across all scenes. ${avoidance}` });
 
     const response = await withTimeout(ai.models.generateContent({
       model: MODEL_NAMES.IMAGE,
@@ -1374,6 +1369,12 @@ const EMOTION_TTS_DIRECTIVE: Record<string, string> = {
   shouting: 'Read with forceful, intense projection: ',
   empathetic: 'Read with warm, compassionate empathy: ',
   sarcastic: 'Read with dry, understated sarcasm: ',
+  clinical: 'Read with measured, clinical precision. No emotion. Documentary authority. Unhurried: ',
+  analytical: 'Read as a forensic analyst presenting evidence. Methodical. Each word deliberate: ',
+  ominous: 'Read with quiet, creeping dread. Low register. Long pauses between phrases: ',
+  accusatory: 'Read with restrained accusation. Controlled fury beneath a professional surface: ',
+  measured: 'Read with the cadence of a veteran detective. Pauses between revelations: ',
+  revelatory: 'Read as though presenting damning evidence. Build to the key phrase, then silence: ',
   neutral: '',
 };
 
@@ -1383,6 +1384,10 @@ const SCENE_EMOTION_PREFIX: Record<string, string> = {
   melancholic: 'Emotional register: melancholic and reflective. ',
   triumphant: 'Emotional register: triumphant and powerful. ',
   mysterious: 'Emotional register: mysterious and cryptic. ',
+  procedural: 'Emotional register: procedural and methodical. Clinical precision. ',
+  interrogative: 'Emotional register: interrogative and probing. Tension beneath calm. ',
+  ominous: 'Emotional register: ominous and foreboding. Something is wrong. ',
+  revelatory: 'Emotional register: revelatory. The truth is emerging. ',
   neutral: '',
 };
 

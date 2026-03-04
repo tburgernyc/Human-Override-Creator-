@@ -106,7 +106,7 @@ export interface Scene {
   productionNotes?: string;
   // Semantic metadata from two-phase script parsing
   emotionalBeat?: 'setup' | 'confrontation' | 'climax' | 'resolution' | 'transition';
-  dominantEmotion?: 'tense' | 'hopeful' | 'melancholic' | 'triumphant' | 'mysterious' | 'neutral';
+  dominantEmotion?: 'tense' | 'hopeful' | 'melancholic' | 'triumphant' | 'mysterious' | 'procedural' | 'interrogative' | 'ominous' | 'revelatory' | 'neutral';
   suggestedColorPalette?: string[];  // Hex codes for scene color intent
   paceRating?: 'slow_burn' | 'moderate' | 'intense';
 }
@@ -114,7 +114,7 @@ export interface Scene {
 export interface DialogueLine {
   speaker: string;
   text: string;
-  emotion?: 'neutral' | 'excited' | 'whispered' | 'serious' | 'shouting' | 'empathetic' | 'sarcastic';
+  emotion?: 'neutral' | 'excited' | 'whispered' | 'serious' | 'shouting' | 'empathetic' | 'sarcastic' | 'clinical' | 'analytical' | 'ominous' | 'accusatory' | 'measured' | 'revelatory';
 }
 
 export interface DirectorDraft {
