@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+
 import { renderMP4 } from './renderer';
 import { projectsRouter } from './projects';
 
@@ -74,67 +74,6 @@ app.all(/^\/api\/gemini\/(.*)/, async (req: any, res) => {
     }
 });
 
-// Director Chat Endpoint - Streaming
-app.post('/api/director/chat', async (req, res) => {
-    try {
-        const { messages, currentPhase, projectName, lastAction } = req.body;
-
-        if (!GEMINI_API_KEY) {
-            return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
-        }
-
-        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.0-flash",
-            systemInstruction: `
-You are the Director — an expert creative AI embedded inside a professional 
-video creation tool. You are proactive, precise, and authoritative. You guide 
-the user through their current creative workflow phase with specific, actionable 
-steps.
-
-Current Phase: ${currentPhase || 'Unknown'}
-Current Project: ${projectName || 'Untitled'}
-User's Last Action: ${lastAction || 'N/A'}
-
-Never be vague. Never ask "how can I help?" — always lead with what the 
-user SHOULD do next based on their phase. Keep responses under 120 words 
-unless the user asks for more detail. Use plain text — no markdown headers.
-      `,
-        });
-
-        // Convert message history to Gemini format (user/model)
-        // Slice to last 20 messages to save context window
-        const history = messages.slice(-20).slice(0, -1).map((msg: any) => ({
-            role: msg.role === "assistant" ? "model" : "user",
-            parts: [{ text: msg.content }],
-        }));
-
-        const chat = model.startChat({ history });
-        const lastMessage = messages[messages.length - 1].content;
-
-        const result = await chat.sendMessageStream(lastMessage);
-
-        // Set headers for streaming
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.setHeader('Transfer-Encoding', 'chunked');
-
-        for await (const chunk of result.stream) {
-            const text = chunk.text();
-            if (text) res.write(text);
-        }
-
-        res.end();
-
-    } catch (error: any) {
-        console.error('Director API Error:', error);
-        // If headers haven't been sent, send JSON error
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'Director chat failed', details: error.message });
-        } else {
-            res.end(); // End stream if error occurs mid-stream
-        }
-    }
-});
 
 // Secure video download endpoint - prevents API key exposure in client
 app.post('/api/download-video', async (req, res) => {
@@ -177,40 +116,7 @@ app.post('/api/download-video', async (req, res) => {
     }
 });
 
-// ─── Vision-capable Director Chat ───────────────────────────────────────────
-app.post('/api/director/chat-vision', async (req, res) => {
-    try {
-        const { message, chatHistory, sceneImages } = req.body;
 
-        if (!GEMINI_API_KEY) {
-            return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
-        }
-
-        const { GoogleGenAI } = await import('@google/genai');
-        const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-
-        const parts: any[] = [];
-        if (sceneImages && Array.isArray(sceneImages)) {
-            sceneImages.forEach((img: string) => {
-                parts.push({ inlineData: { mimeType: 'image/png', data: img } });
-            });
-        }
-        parts.push({ text: message });
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: [
-                ...(chatHistory || []).map((m: any) => ({ role: m.role, parts: [{ text: m.content }] })),
-                { role: 'user', parts }
-            ]
-        });
-
-        res.json({ text: response.text });
-    } catch (error: any) {
-        console.error('Director vision chat error:', error);
-        res.status(500).json({ error: 'Director vision chat failed', details: error.message });
-    }
-});
 
 // ─── Server-side FFmpeg render ────────────────────────────────────────────────
 app.post('/api/render', express.json({ limit: '2gb' }), async (req, res) => {

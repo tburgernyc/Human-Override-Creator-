@@ -11,10 +11,9 @@
     "start": "npx tsx server/proxy.ts"
   },
   "dependencies": {
-    "@google/genai": "^1.40.0",
-    "@google/generative-ai": "^0.24.1",
-    "@rollup/wasm-node": "^4.57.1",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@google/genai": "^1.40.0",
+    "@rollup/wasm-node": "^4.57.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
@@ -28,7 +27,6 @@
     "csstype": "3.2.2"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/fluent-ffmpeg": "^2.1.27",
