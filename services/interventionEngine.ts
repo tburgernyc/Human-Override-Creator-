@@ -33,6 +33,27 @@ export interface InterventionTrigger {
 const MAX_TRIGGER_HISTORY = 50;
 const triggerHistory: Map<string, number> = new Map();
 
+// Task 14: VQA gate-aware suppression — when VQA has validated all scenes,
+// suppress redundant continuity audit triggers to prevent the Director from
+// re-auditing already-validated content
+let _vqaValidatedSceneIds: Set<string | number> = new Set();
+
+export function markSceneVQAValidated(sceneId: string | number): void {
+  _vqaValidatedSceneIds.add(sceneId);
+}
+
+export function isSceneVQAValidated(sceneId: string | number): boolean {
+  return _vqaValidatedSceneIds.has(sceneId);
+}
+
+export function allScenesVQAValidated(project: ProjectState): boolean {
+  return project.scenes.length > 0 && project.scenes.every(s => _vqaValidatedSceneIds.has(s.id));
+}
+
+export function resetVQAValidation(): void {
+  _vqaValidatedSceneIds = new Set();
+}
+
 /**
  * Check if a trigger is on cooldown
  */

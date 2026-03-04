@@ -15,6 +15,10 @@ interface RenderOptions {
   fps: number;
   resolution: '720p' | '1080p';
   format: 'mp4' | 'webm';
+  // Task 11: Master Clock A/V sync — if set, FFmpeg trims/pads video to this duration
+  masterClockDuration?: number;
+  // Task 12: Forensic system hum frequency (default 50Hz at -30dB)
+  systemHumHz?: number;
 }
 
 export async function renderMP4(frames: string[], options: RenderOptions): Promise<Buffer> {
@@ -43,24 +47,42 @@ export async function renderMP4(frames: string[], options: RenderOptions): Promi
       const scale = options.resolution === '1080p' ? 1920 : 1280;
       const outputOptions = options.format === 'mp4'
         ? [
-            '-crf 16',
-            '-preset slow',       // Better compression quality — broadcast standard
-            '-pix_fmt yuv420p',
-            '-movflags +faststart',
-            `-vf scale=${scale}:-2`,
-            '-c:a aac',           // AAC audio — broadcast standard
-            '-ar 48000',          // 48kHz sample rate
-            '-b:a 192k',          // 192kbps audio bitrate
-          ]
+          '-crf 16',
+          '-preset slow',       // Better compression quality — broadcast standard
+          '-pix_fmt yuv420p',
+          '-movflags +faststart',
+          `-vf scale=${scale}:-2`,
+          '-c:a aac',           // AAC audio — broadcast standard
+          '-ar 48000',          // 48kHz sample rate
+          '-b:a 192k',          // 192kbps audio bitrate
+          // Task 11: Master Clock A/V sync conformance
+          ...(options.masterClockDuration ? [`-t ${options.masterClockDuration.toFixed(3)}`] : []),
+        ]
         : [
-            '-crf 16',
-            '-pix_fmt yuv420p',
-            '-b:v 40M',           // 40Mbps for WebM output
-            `-vf scale=${scale}:-2`,
-          ];
-      ffmpeg()
+          '-crf 16',
+          '-pix_fmt yuv420p',
+          '-b:v 40M',           // 40Mbps for WebM output
+          `-vf scale=${scale}:-2`,
+          // Task 11: Master Clock A/V sync conformance
+          ...(options.masterClockDuration ? [`-t ${options.masterClockDuration.toFixed(3)}`] : []),
+        ];
+
+      const cmd = ffmpeg()
         .input(path.join(tmpDir, 'frame_%06d.png'))
-        .inputFPS(options.fps)
+        .inputFPS(options.fps);
+
+      // Task 12: Forensic system hum — generate sine wave and mix into audio at -30dB
+      const humHz = options.systemHumHz ?? 50;
+      if (humHz > 0) {
+        const humDuration = options.masterClockDuration || (frames.length / options.fps);
+        cmd
+          .input(`sine=frequency=${humHz}:duration=${humDuration.toFixed(3)}`)
+          .inputFormat('lavfi');
+        // Mix hum at -30dB below main audio
+        outputOptions.push('-filter_complex', `[1:a]volume=-30dB[hum];[0:a][hum]amix=inputs=2:duration=shortest`);
+      }
+
+      cmd
         .videoCodec(options.format === 'mp4' ? 'libx264' : 'libvpx-vp9')
         .outputOptions(outputOptions)
         .output(outputPath)
@@ -73,7 +95,7 @@ export async function renderMP4(frames: string[], options: RenderOptions): Promi
     return outputBuffer;
   } finally {
     // Clean up temp dir async
-    fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => { });
   }
 }
 
