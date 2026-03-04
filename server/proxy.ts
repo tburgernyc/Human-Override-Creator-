@@ -235,7 +235,7 @@ app.use('/api/projects', projectsRouter);
 
 // SPA catch-all — serve index.html for any non-API route so React Router works
 if (IS_PROD) {
-    app.get('*', (_req, res) => {
+    app.get(/.*/, (_req, res) => {
         const indexPath = path.join(distPath, 'index.html');
         if (fs.existsSync(indexPath)) {
             res.sendFile(indexPath);
