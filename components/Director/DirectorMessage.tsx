@@ -45,7 +45,7 @@ export const DirectorMessage: React.FC<DirectorMessageProps> = ({ message, onAct
           )}
 
           {/* Render content with basic bold support */}
-          <div className="whitespace-pre-wrap text-sm">
+          <div className={`whitespace-pre-wrap ${!isUser ? 'text-xl leading-relaxed' : 'text-sm'}`}>
             {message.content.split(/(\*\*[^*]+\*\*)/).map((part, i) =>
               part.startsWith('**') && part.endsWith('**') ? (
                 <strong key={i} className="font-semibold text-white">

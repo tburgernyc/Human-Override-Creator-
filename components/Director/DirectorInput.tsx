@@ -42,7 +42,7 @@ export const DirectorInput: React.FC<DirectorInputProps> = ({ onSend, isTyping, 
                     onKeyDown={handleKeyDown}
                     placeholder={placeholder || "Ask the Director anything..."}
                     disabled={isTyping}
-                    className="w-full min-h-[52px] max-h-[240px] bg-[#111c2e] border border-[#1a3a5c] rounded-xl pl-4 pr-14 py-3 text-sm text-[#cde8ff] placeholder-[#3a5a7a] focus:outline-none focus:border-[#00d4ff] focus:ring-1 focus:ring-[#00d4ff]/30 transition-all resize-none font-sans leading-relaxed scrollbar-hide"
+                    className="w-full min-h-[26px] max-h-[120px] bg-[#111c2e] border border-[#1a3a5c] rounded-lg pl-3 pr-10 py-1.5 text-xs text-[#cde8ff] placeholder-[#3a5a7a] focus:outline-none focus:border-[#00d4ff] focus:ring-1 focus:ring-[#00d4ff]/30 transition-all resize-none font-sans leading-relaxed scrollbar-hide"
                     rows={1}
                 />
                 <button
