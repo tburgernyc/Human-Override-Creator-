@@ -46,12 +46,12 @@ export const ScriptDoctor: React.FC<ScriptDoctorProps> = ({ project, onClose }) 
           {!diagnosis ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <div className="w-24 h-24 rounded-full nm-button flex items-center justify-center mb-8 relative">
-                 <i className="fa-solid fa-stethoscope text-4xl text-luna-gold"></i>
-                 <div className="absolute inset-0 rounded-full border border-luna-gold/20 animate-ping"></div>
+                <i className="fa-solid fa-stethoscope text-4xl text-luna-gold"></i>
+                <div className="absolute inset-0 rounded-full border border-luna-gold/20 animate-ping"></div>
               </div>
               <h3 className="text-2xl font-bold text-white mb-4 font-mono">Initiate Narrative Scan</h3>
               <p className="text-celestial-stone text-sm max-w-md mb-10">The Script Doctor will analyze your project for structural weaknesses, pacing issues, and character consistency gaps.</p>
-              <button 
+              <button
                 onClick={runDiagnosis}
                 disabled={isDiagnosing}
                 className="px-12 py-4 nm-button-gold text-white rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-nm-gold hover:scale-105 transition-all"
@@ -62,32 +62,34 @@ export const ScriptDoctor: React.FC<ScriptDoctorProps> = ({ project, onClose }) 
             </div>
           ) : (
             <div className="animate-in slide-in-from-bottom-5 duration-700">
-               <div className="nm-inset-input p-10 rounded-[3rem] border border-white/5 relative bg-black/40">
-                  <div className="absolute -top-4 left-10 px-6 py-1.5 bg-luna-gold rounded-full text-[9px] font-black text-white uppercase tracking-widest shadow-lg">Diagnosis Results</div>
-                  <div className="prose prose-invert max-w-none">
-                     <p className="text-starlight text-lg leading-relaxed font-light italic opacity-90 whitespace-pre-wrap">
-                        {diagnosis}
-                     </p>
-                  </div>
-               </div>
+              <div className="nm-inset-input p-10 rounded-[3rem] border border-white/5 relative bg-black/40">
+                <div className="absolute -top-4 left-10 px-6 py-1.5 bg-luna-gold rounded-full text-[9px] font-black text-white uppercase tracking-widest shadow-lg">Diagnosis Results</div>
+                <div className="prose prose-invert max-w-none">
+                  <p className="text-starlight text-lg leading-relaxed font-light italic opacity-90 whitespace-pre-wrap">
+                    {diagnosis}
+                  </p>
+                </div>
+              </div>
 
-               <div className="grid grid-cols-2 gap-8 mt-12">
-                  <div className="p-8 rounded-3xl nm-button border border-white/5">
-                     <h4 className="text-[10px] font-black text-solar-amber uppercase tracking-[0.2em] mb-4">Risk Factors Detected</h4>
-                     <p className="text-[11px] text-celestial-stone italic opacity-60">"Minor pacing drop in act 2. Suggest intercutting B-roll at Sequence #3."</p>
-                  </div>
-                  <div className="p-8 rounded-3xl nm-button border border-white/5">
-                     <h4 className="text-[10px] font-black text-deep-sage uppercase tracking-[0.2em] mb-4">Aesthetic Strengths</h4>
-                     <p className="text-[11px] text-celestial-stone italic opacity-60">"Character voice mapping is highly distinct. Visual coherence score: Optimal."</p>
-                  </div>
-               </div>
+              <div className="grid grid-cols-2 gap-8 mt-12">
+                <div className="p-8 rounded-3xl nm-button border border-white/5">
+                  <h4 className="text-[10px] font-black text-solar-amber uppercase tracking-[0.2em] mb-4">Risk Factors Detected</h4>
+                  <p className="text-[11px] text-celestial-stone italic opacity-60">"Minor pacing drop in act 2. Suggest intercutting B-roll at Sequence #3."</p>
+                </div>
+                <div className="p-8 rounded-3xl nm-button border border-white/5">
+                  <h4 className="text-[10px] font-black text-deep-sage uppercase tracking-[0.2em] mb-4">Aesthetic Strengths</h4>
+                  <p className="text-[11px] text-celestial-stone italic opacity-60">"Character voice mapping is highly distinct. Visual coherence score: Optimal."</p>
+                </div>
+              </div>
             </div>
           )}
         </div>
 
         <div className="p-8 border-t border-white/5 bg-white/5 flex justify-between items-center px-10">
           <button onClick={() => setDiagnosis(null)} className="text-[9px] font-bold text-mystic-gray uppercase tracking-widest hover:text-white transition-colors">Clear Diagnosis</button>
-          <button onClick={onClose} className="px-12 py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-luna-gold hover:text-white transition-all">Close Diagnostic</button>
+          <button onClick={onClose} className="px-12 py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-luna-gold hover:text-white transition-all">
+            <i className="fa-solid fa-arrow-left mr-2"></i> Back
+          </button>
         </div>
       </div>
     </div>

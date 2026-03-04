@@ -79,13 +79,13 @@ export const ProductionManifest: React.FC<ProductionManifestProps> = ({ project,
     const overallHealth = auditResults.every(a => a.status === 'Optimal' || a.status === 'High' || a.status === 'Calibrated')
         ? 'EXCELLENT'
         : auditResults.some(a => a.status === 'Failed')
-        ? 'CRITICAL'
-        : 'ACCEPTABLE';
+            ? 'CRITICAL'
+            : 'ACCEPTABLE';
 
     return (
         <div className="fixed inset-0 z-[300] bg-eclipse-black/95 backdrop-blur-3xl flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-500">
             <div className="w-full max-w-5xl glass-panel rounded-[3rem] border-white/10 overflow-hidden flex flex-col shadow-[0_50px_200px_rgba(0,0,0,0.8)]">
-                
+
                 <div className="p-10 border-b border-white/5 flex justify-between items-center bg-gold-gradient/5">
                     <div>
                         <h2 className="text-3xl font-black text-white tracking-tighter uppercase font-mono italic">Production Manifest</h2>
@@ -98,7 +98,7 @@ export const ProductionManifest: React.FC<ProductionManifestProps> = ({ project,
 
                 <div className="flex-1 overflow-y-auto p-12 scrollbar-hide">
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-                        
+
                         {/* Stats Panel */}
                         <div className="lg:col-span-1 space-y-8">
                             <div className="p-8 rounded-3xl bg-white/5 border border-white/5 shadow-inner">
@@ -150,47 +150,44 @@ export const ProductionManifest: React.FC<ProductionManifestProps> = ({ project,
                                 <h3 className="text-[10px] font-black text-mystic-gray uppercase tracking-[0.2em] mb-8 flex items-center gap-2">
                                     <i className="fa-solid fa-list-check text-luna-gold"></i> Production Integrity Audit
                                 </h3>
-                                
+
                                 <div className="space-y-6">
                                     {auditResults.map((item, i) => {
                                         const statusColor =
                                             item.status === 'Optimal' || item.status === 'High' || item.status === 'Calibrated' ? 'text-deep-sage' :
-                                            item.status === 'Warning' ? 'text-solar-amber' :
-                                            'text-red-500';
+                                                item.status === 'Warning' ? 'text-solar-amber' :
+                                                    'text-red-500';
 
                                         return (
-                                          <div key={i} className="flex gap-6 p-6 rounded-2xl hover:bg-white/5 transition-colors border border-transparent hover:border-white/5 group">
-                                              <div className="w-12 h-12 rounded-xl bg-eclipse-black flex items-center justify-center border border-white/10 text-mystic-gray group-hover:text-luna-gold transition-colors">
-                                                  <i className={`fa-solid ${item.icon}`}></i>
-                                              </div>
-                                              <div className="flex-1">
-                                                  <div className="flex justify-between items-center mb-1">
-                                                      <h4 className="text-xs font-bold text-white uppercase tracking-widest">{item.title}</h4>
-                                                      <span className={`text-[9px] font-black uppercase tracking-widest ${statusColor}`}>{item.status}</span>
-                                                  </div>
-                                                  <p className="text-[11px] text-celestial-stone leading-relaxed opacity-60 font-light">{item.desc}</p>
-                                              </div>
-                                          </div>
+                                            <div key={i} className="flex gap-6 p-6 rounded-2xl hover:bg-white/5 transition-colors border border-transparent hover:border-white/5 group">
+                                                <div className="w-12 h-12 rounded-xl bg-eclipse-black flex items-center justify-center border border-white/10 text-mystic-gray group-hover:text-luna-gold transition-colors">
+                                                    <i className={`fa-solid ${item.icon}`}></i>
+                                                </div>
+                                                <div className="flex-1">
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <h4 className="text-xs font-bold text-white uppercase tracking-widest">{item.title}</h4>
+                                                        <span className={`text-[9px] font-black uppercase tracking-widest ${statusColor}`}>{item.status}</span>
+                                                    </div>
+                                                    <p className="text-[11px] text-celestial-stone leading-relaxed opacity-60 font-light">{item.desc}</p>
+                                                </div>
+                                            </div>
                                         );
                                     })}
                                 </div>
 
-                                <div className={`mt-12 p-6 rounded-2xl flex items-center justify-between ${
-                                    overallHealth === 'EXCELLENT' ? 'bg-luna-gold/10 border border-luna-gold/20' :
-                                    overallHealth === 'CRITICAL' ? 'bg-red-500/10 border border-red-500/20' :
-                                    'bg-solar-amber/10 border border-solar-amber/20'
-                                }`}>
+                                <div className={`mt-12 p-6 rounded-2xl flex items-center justify-between ${overallHealth === 'EXCELLENT' ? 'bg-luna-gold/10 border border-luna-gold/20' :
+                                        overallHealth === 'CRITICAL' ? 'bg-red-500/10 border border-red-500/20' :
+                                            'bg-solar-amber/10 border border-solar-amber/20'
+                                    }`}>
                                     <div className="flex items-center gap-4">
-                                        <div className={`w-3 h-3 rounded-full animate-pulse ${
-                                            overallHealth === 'EXCELLENT' ? 'bg-luna-gold shadow-[0_0_10px_#3b82f6]' :
-                                            overallHealth === 'CRITICAL' ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' :
-                                            'bg-solar-amber shadow-[0_0_10px_#f59e0b]'
-                                        }`}></div>
-                                        <p className={`text-[10px] font-bold uppercase tracking-widest ${
-                                            overallHealth === 'EXCELLENT' ? 'text-luna-gold' :
-                                            overallHealth === 'CRITICAL' ? 'text-red-500' :
-                                            'text-solar-amber'
-                                        }`}>Production Health: {overallHealth}</p>
+                                        <div className={`w-3 h-3 rounded-full animate-pulse ${overallHealth === 'EXCELLENT' ? 'bg-luna-gold shadow-[0_0_10px_#3b82f6]' :
+                                                overallHealth === 'CRITICAL' ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' :
+                                                    'bg-solar-amber shadow-[0_0_10px_#f59e0b]'
+                                            }`}></div>
+                                        <p className={`text-[10px] font-bold uppercase tracking-widest ${overallHealth === 'EXCELLENT' ? 'text-luna-gold' :
+                                                overallHealth === 'CRITICAL' ? 'text-red-500' :
+                                                    'text-solar-amber'
+                                            }`}>Production Health: {overallHealth}</p>
                                     </div>
                                     <button className="text-[10px] font-black text-white uppercase tracking-widest underline decoration-luna-gold underline-offset-4">Rerun Deep Audit</button>
                                 </div>
@@ -201,11 +198,11 @@ export const ProductionManifest: React.FC<ProductionManifestProps> = ({ project,
                 </div>
 
                 <div className="p-8 bg-eclipse-black border-t border-white/5 flex justify-center">
-                    <button 
+                    <button
                         onClick={onClose}
                         className="px-12 py-4 bg-white text-black rounded-full font-black uppercase text-[10px] tracking-[0.3em] hover:bg-luna-gold hover:text-white transition-all shadow-2xl"
                     >
-                        Dismiss Manifest
+                        <i className="fa-solid fa-arrow-left mr-2"></i> Back
                     </button>
                 </div>
             </div>

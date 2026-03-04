@@ -229,7 +229,9 @@ export const ContinuityAuditor: React.FC<ContinuityAuditorProps> = ({
             <i className="fa-solid fa-shield-halved text-deep-sage"></i>
             Neural continuity {Object.keys(auditResults).length > 0 ? 'AI-verified' : 'estimated'} for {project.characters.length} active personnel.
           </p>
-          <button onClick={onClose} className="px-12 py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-solar-amber hover:text-white transition-all">Seal Manifest</button>
+          <button onClick={onClose} className="px-12 py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-solar-amber hover:text-white transition-all">
+            <i className="fa-solid fa-arrow-left mr-2"></i> Back
+          </button>
         </div>
       </div>
     </div>

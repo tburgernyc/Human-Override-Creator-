@@ -8,31 +8,31 @@ import { ProductionStageOverview } from './components/ProductionStageOverview';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 // ── Lazy-loaded views (only fetched when the user navigates to them) ──────────
-const LandingPage       = lazy(() => import('./components/LandingPage').then(m => ({ default: m.LandingPage })));
-const ProjectsView      = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })));
+const LandingPage = lazy(() => import('./components/LandingPage').then(m => ({ default: m.LandingPage })));
+const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })));
 
 // ── Lazy-loaded phase workspaces ─────────────────────────────────────────────
-const ScriptDoctor      = lazy(() => import('./components/ScriptDoctor').then(m => ({ default: m.ScriptDoctor })));
-const Moodboard         = lazy(() => import('./components/Moodboard').then(m => ({ default: m.Moodboard })));
-const CastEnsemble      = lazy(() => import('./components/CastEnsemble').then(m => ({ default: m.CastEnsemble })));
+const ScriptDoctor = lazy(() => import('./components/ScriptDoctor').then(m => ({ default: m.ScriptDoctor })));
+const Moodboard = lazy(() => import('./components/Moodboard').then(m => ({ default: m.Moodboard })));
+const CastEnsemble = lazy(() => import('./components/CastEnsemble').then(m => ({ default: m.CastEnsemble })));
 const ProductionTimeline = lazy(() => import('./components/ProductionTimeline').then(m => ({ default: m.ProductionTimeline })));
-const YouTubeOptimizer  = lazy(() => import('./components/YouTubeOptimizer').then(m => ({ default: m.YouTubeOptimizer })));
+const YouTubeOptimizer = lazy(() => import('./components/YouTubeOptimizer').then(m => ({ default: m.YouTubeOptimizer })));
 
 // ── Lazy-loaded modals (fetched on first open) ───────────────────────────────
-const CharacterModal      = lazy(() => import('./components/CharacterModal').then(m => ({ default: m.CharacterModal })));
-const SceneInspector      = lazy(() => import('./components/SceneInspector').then(m => ({ default: m.SceneInspector })));
-const Player              = lazy(() => import('./components/Player').then(m => ({ default: m.Player })));
-const Renderer            = lazy(() => import('./components/Renderer').then(m => ({ default: m.Renderer })));
-const AssetLibrary        = lazy(() => import('./components/AssetLibrary').then(m => ({ default: m.AssetLibrary })));
-const AudioMixer          = lazy(() => import('./components/AudioMixer').then(m => ({ default: m.AudioMixer })));
-const ContinuityAuditor   = lazy(() => import('./components/ContinuityAuditor').then(m => ({ default: m.ContinuityAuditor })));
+const CharacterModal = lazy(() => import('./components/CharacterModal').then(m => ({ default: m.CharacterModal })));
+const SceneInspector = lazy(() => import('./components/SceneInspector').then(m => ({ default: m.SceneInspector })));
+const Player = lazy(() => import('./components/Player').then(m => ({ default: m.Player })));
+const Renderer = lazy(() => import('./components/Renderer').then(m => ({ default: m.Renderer })));
+const AssetLibrary = lazy(() => import('./components/AssetLibrary').then(m => ({ default: m.AssetLibrary })));
+const AudioMixer = lazy(() => import('./components/AudioMixer').then(m => ({ default: m.AudioMixer })));
+const ContinuityAuditor = lazy(() => import('./components/ContinuityAuditor').then(m => ({ default: m.ContinuityAuditor })));
 const ConsistencyDashboard = lazy(() => import('./components/ConsistencyDashboard').then(m => ({ default: m.ConsistencyDashboard })));
-const DirectorialDeck     = lazy(() => import('./components/DirectorialDeck').then(m => ({ default: m.DirectorialDeck })));
+const DirectorialDeck = lazy(() => import('./components/DirectorialDeck').then(m => ({ default: m.DirectorialDeck })));
 const BRollSuggestionModal = lazy(() => import('./components/BRollSuggestionModal').then(m => ({ default: m.BRollSuggestionModal })));
-const DirectorDraftModal  = lazy(() => import('./components/DirectorDraftModal').then(m => ({ default: m.DirectorDraftModal })));
-const StoryboardView      = lazy(() => import('./components/StoryboardView').then(m => ({ default: m.StoryboardView })));
-const VFXMaster           = lazy(() => import('./components/VFXMaster').then(m => ({ default: m.VFXMaster })));
-const ProductionManifest  = lazy(() => import('./components/ProductionManifest').then(m => ({ default: m.ProductionManifest })));
+const DirectorDraftModal = lazy(() => import('./components/DirectorDraftModal').then(m => ({ default: m.DirectorDraftModal })));
+const StoryboardView = lazy(() => import('./components/StoryboardView').then(m => ({ default: m.StoryboardView })));
+const VFXMaster = lazy(() => import('./components/VFXMaster').then(m => ({ default: m.VFXMaster })));
+const ProductionManifest = lazy(() => import('./components/ProductionManifest').then(m => ({ default: m.ProductionManifest })));
 
 import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft, ProductionPhase, LightingBrief, ConsistencyScore } from './types';
 import {
@@ -251,7 +251,7 @@ const App: React.FC = () => {
         if (p.scenes.every((s: any) => p.assets[s.id]?.status === 'complete')) return 'post';
         return 'synthesis';
       }
-    } catch {}
+    } catch { }
     return 'genesis';
   });
 
@@ -399,8 +399,8 @@ const App: React.FC = () => {
   const handleApplyDraft = (draft: DirectorDraft) => {
     setProject(p => ({
       ...p,
-      scenes: p.scenes.map(s => {
-        const proposed = draft.proposedChanges.find(c => c.sceneId === s.id);
+      scenes: p.scenes.map((s, index) => {
+        const proposed = draft.proposedChanges.find(c => c.sceneId === s.id || c.sceneId === (index + 1));
         return proposed ? { ...s, ...proposed.updates } : s;
       }),
       activeDraft: null
@@ -464,25 +464,41 @@ const App: React.FC = () => {
       setProject(p => ({ ...p, characters: [...p.characters, newChar] }));
       return "Character added and synthesized with identity lock.";
     } else if (name === 'update_character') {
-      const { character_name, voiceId, description, visualPrompt, voiceSpeed, voicePitch } = args;
-      setProject(p => ({
-        ...p,
-        characters: p.characters.map(c => {
-          if (c.name.toLowerCase() !== character_name.toLowerCase()) return c;
-          const updates: Partial<Character> = {};
-          if (voiceId) updates.voiceId = voiceId;
-          if (description) updates.description = description;
-          if (visualPrompt) updates.visualPrompt = visualPrompt;
-          if (voiceSpeed !== undefined || voicePitch !== undefined) {
-            updates.voiceSettings = {
-              speed: voiceSpeed ?? c.voiceSettings?.speed ?? 1,
-              pitch: voicePitch ?? c.voiceSettings?.pitch ?? 0
-            };
-          }
-          return { ...c, ...updates };
-        })
-      }));
-      addLog(`Character "${character_name}" updated by Director.`, "ai_suggestion");
+      const { character_name, newName, voiceId, description, visualPrompt, voiceSpeed, voicePitch } = args;
+      setProject(p => {
+        const renamed = newName && newName.toLowerCase() !== character_name.toLowerCase();
+
+        return {
+          ...p,
+          characters: p.characters.map(c => {
+            if (c.name.toLowerCase() !== character_name.toLowerCase()) return c;
+            const updates: Partial<Character> = {};
+            if (newName) updates.name = newName;
+            if (voiceId) updates.voiceId = voiceId;
+            if (description) updates.description = description;
+            if (visualPrompt) updates.visualPrompt = visualPrompt;
+            if (voiceSpeed !== undefined || voicePitch !== undefined) {
+              updates.voiceSettings = {
+                speed: voiceSpeed ?? c.voiceSettings?.speed ?? 1,
+                pitch: voicePitch ?? c.voiceSettings?.pitch ?? 0
+              };
+            }
+            return { ...c, ...updates };
+          }),
+          ...(renamed && {
+            scenes: p.scenes.map(s => ({
+              ...s,
+              charactersInScene: s.charactersInScene?.map(cn => cn.toLowerCase() === character_name.toLowerCase() ? newName : cn),
+              narratorLines: s.narratorLines?.map(nl =>
+                (nl.speaker || '').toLowerCase() === character_name.toLowerCase()
+                  ? { ...nl, speaker: newName }
+                  : nl
+              )
+            }))
+          })
+        };
+      });
+      addLog(`Character "${character_name}" updated by Director.${newName ? ` Renamed to ${newName}.` : ''}`, "ai_suggestion");
       return `Character "${character_name}" updated successfully.`;
     } else if (name === 'propose_batch_refinement') {
       const { reasoning, changes } = args;
@@ -1475,571 +1491,571 @@ const App: React.FC = () => {
           </div>
         </div>
       }>
-      <div
-        className="relative min-h-screen pb-32 transition-all duration-300 ease-in-out"
-        style={{ paddingRight: chatOpen ? '420px' : '52px' }}
-      >
-        {view === 'landing' && <LandingPage onStart={() => setView('dashboard')} />}
-        {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { setProject(p); setView('dashboard'); }} onDelete={idx => setArchives(prev => prev.filter((_, i) => i !== idx))} onImport={() => fileInputRef.current?.click()} />}
+        <div
+          className="relative min-h-screen pb-32 transition-all duration-300 ease-in-out"
+          style={{ paddingRight: chatOpen ? '420px' : '52px' }}
+        >
+          {view === 'landing' && <LandingPage onStart={() => setView('dashboard')} />}
+          {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { setProject(p); setView('dashboard'); }} onDelete={idx => setArchives(prev => prev.filter((_, i) => i !== idx))} onImport={() => fileInputRef.current?.click()} />}
 
-        <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          const reader = new FileReader();
-          reader.onload = (evt) => {
-            try {
-              const imported = JSON.parse(evt.target?.result as string);
-              if (imported && imported.script !== undefined) {
-                setProject(imported);
-                setView('dashboard');
-                addLog('Project imported successfully.', 'success');
-              } else {
-                addLog('Import failed: invalid project file format.', 'error');
+          <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+              try {
+                const imported = JSON.parse(evt.target?.result as string);
+                if (imported && imported.script !== undefined) {
+                  setProject(imported);
+                  setView('dashboard');
+                  addLog('Project imported successfully.', 'success');
+                } else {
+                  addLog('Import failed: invalid project file format.', 'error');
+                }
+              } catch {
+                addLog('Import failed: could not parse JSON file.', 'error');
               }
-            } catch {
-              addLog('Import failed: could not parse JSON file.', 'error');
-            }
-            e.target.value = '';
-          };
-          reader.readAsText(file);
-        }} />
+              e.target.value = '';
+            };
+            reader.readAsText(file);
+          }} />
 
-        {view === 'dashboard' && (
-          <div className="flex flex-col gap-6 pt-6 relative max-w-[1400px] mx-auto animate-in fade-in duration-700 px-4 sm:px-0">
+          {view === 'dashboard' && (
+            <div className="flex flex-col gap-6 pt-6 relative max-w-[1400px] mx-auto animate-in fade-in duration-700 px-4 sm:px-0">
 
-            {/* ── PRODUCTION RAIL — persistent phase navigator ── */}
-            <ProductionRail
-              activePhase={activePhase}
-              selectedPhase={selectedStudioPhase}
-              onSelectPhase={handleSelectPhase}
-              project={project}
-              isBatchProcessing={isBatchProcessing}
-              batchProgress={{ completed: batchCompletedCount, total: project.scenes.length }}
-              errorCount={assetErrorCount}
-              directorOpen={chatOpen}
-              onToggleDirector={() => setChatOpen(!chatOpen)}
-              directorMode={directorMode}
-              onToggleMode={() => setDirectorMode(m => m === 'guided' ? 'expert' : 'guided')}
-            />
+              {/* ── PRODUCTION RAIL — persistent phase navigator ── */}
+              <ProductionRail
+                activePhase={activePhase}
+                selectedPhase={selectedStudioPhase}
+                onSelectPhase={handleSelectPhase}
+                project={project}
+                isBatchProcessing={isBatchProcessing}
+                batchProgress={{ completed: batchCompletedCount, total: project.scenes.length }}
+                errorCount={assetErrorCount}
+                directorOpen={chatOpen}
+                onToggleDirector={() => setChatOpen(!chatOpen)}
+                directorMode={directorMode}
+                onToggleMode={() => setDirectorMode(m => m === 'guided' ? 'expert' : 'guided')}
+              />
 
-            {/* ── PHASE WORKSPACES — tab-switched, no more long scroll ── */}
-            <div className="animate-in fade-in duration-300" key={selectedStudioPhase}>
+              {/* ── PHASE WORKSPACES — tab-switched, no more long scroll ── */}
+              <div className="animate-in fade-in duration-300" key={selectedStudioPhase}>
 
-            {/* ════════════════════ GENESIS ════════════════════ */}
-            {selectedStudioPhase === 'genesis' && (
-            <div className="space-y-8">
-            <div className={`grid grid-cols-1 xl:grid-cols-12 gap-10`}>
-              <div className="xl:col-span-8">
-                <ScriptInput
-                  script={project.script || ''}
-                  onScriptChange={(s) => { setProject(p => ({ ...p, script: s })); setAnalysisError(null); }}
-                  onAnalyze={handleAnalyze}
-                  isAnalyzing={project.status === 'analyzing'}
-                  analysisError={analysisError}
-                />
-              </div>
-              <div className="xl:col-span-4 flex flex-col gap-6">
-                <Moodboard
-                  referenceImage={project.modules.outline}
-                  onUpdate={(img) => setProject(p => ({ ...p, modules: { ...p.modules, outline: img } }))}
-                  onClear={() => setProject(p => ({ ...p, modules: { ...p.modules, outline: undefined } }))}
-                />
-                <div className="nm-panel p-8 flex-1 flex flex-col justify-center border border-white/5 bg-black/20">
-                  <div className="flex items-center gap-4 mb-6">
-                    <i className="fa-solid fa-sliders text-luna-gold"></i>
-                    <h4 className="text-[10px] font-black text-white uppercase tracking-widest">Aesthetic Protocol</h4>
+                {/* ════════════════════ GENESIS ════════════════════ */}
+                {selectedStudioPhase === 'genesis' && (
+                  <div className="space-y-8">
+                    <div className={`grid grid-cols-1 xl:grid-cols-12 gap-10`}>
+                      <div className="xl:col-span-8">
+                        <ScriptInput
+                          script={project.script || ''}
+                          onScriptChange={(s) => { setProject(p => ({ ...p, script: s })); setAnalysisError(null); }}
+                          onAnalyze={handleAnalyze}
+                          isAnalyzing={project.status === 'analyzing'}
+                          analysisError={analysisError}
+                        />
+                      </div>
+                      <div className="xl:col-span-4 flex flex-col gap-6">
+                        <Moodboard
+                          referenceImage={project.modules.outline}
+                          onUpdate={(img) => setProject(p => ({ ...p, modules: { ...p.modules, outline: img } }))}
+                          onClear={() => setProject(p => ({ ...p, modules: { ...p.modules, outline: undefined } }))}
+                        />
+                        <div className="nm-panel p-8 flex-1 flex flex-col justify-center border border-white/5 bg-black/20">
+                          <div className="flex items-center gap-4 mb-6">
+                            <i className="fa-solid fa-sliders text-luna-gold"></i>
+                            <h4 className="text-[10px] font-black text-white uppercase tracking-widest">Aesthetic Protocol</h4>
+                          </div>
+                          <div className="space-y-6">
+                            <div className="space-y-2">
+                              <label className="text-[8px] text-mystic-gray uppercase font-black">Global Style Vector</label>
+                              <select value={project.globalStyle} onChange={e => setProject(p => ({ ...p, globalStyle: e.target.value }))} className="w-full bg-eclipse-black border border-white/10 rounded-xl px-4 py-3 text-[10px] text-white font-black uppercase tracking-widest outline-none nm-inset-input shadow-inner">{VISUAL_STYLES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[8px] text-mystic-gray uppercase font-black">Aspect Ratio</label>
+                              <select value={aspectRatio} onChange={e => setAspectRatio(e.target.value as any)} className="w-full bg-eclipse-black border border-white/10 rounded-xl px-4 py-3 text-[10px] text-luna-gold font-black uppercase tracking-widest outline-none nm-inset-input shadow-inner"><option value={AspectRatio.LANDSCAPE}>16:9 Cinema</option><option value={AspectRatio.PORTRAIT}>9:16 Shorts</option><option value={AspectRatio.SQUARE}>1:1 Social</option></select>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>{/* end genesis grid */}
+
+                    {/* Genesis → Manifest CTA */}
+                    <PhaseCTA
+                      currentPhase="genesis"
+                      nextPhase="manifest"
+                      nextPhaseLabel="Manifest Cast"
+                      items={genesisCTAItems}
+                      onNext={() => handleAdvancePhase('manifest')}
+                      onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('What do I need to finish in Genesis before I can move to Manifest?'); }}
+                      canAdvance={project.scenes.length > 0}
+                    />
                   </div>
-                  <div className="space-y-6">
-                    <div className="space-y-2">
-                      <label className="text-[8px] text-mystic-gray uppercase font-black">Global Style Vector</label>
-                      <select value={project.globalStyle} onChange={e => setProject(p => ({ ...p, globalStyle: e.target.value }))} className="w-full bg-eclipse-black border border-white/10 rounded-xl px-4 py-3 text-[10px] text-white font-black uppercase tracking-widest outline-none nm-inset-input shadow-inner">{VISUAL_STYLES.map(s => <option key={s} value={s}>{s}</option>)}</select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[8px] text-mystic-gray uppercase font-black">Aspect Ratio</label>
-                      <select value={aspectRatio} onChange={e => setAspectRatio(e.target.value as any)} className="w-full bg-eclipse-black border border-white/10 rounded-xl px-4 py-3 text-[10px] text-luna-gold font-black uppercase tracking-widest outline-none nm-inset-input shadow-inner"><option value={AspectRatio.LANDSCAPE}>16:9 Cinema</option><option value={AspectRatio.PORTRAIT}>9:16 Shorts</option><option value={AspectRatio.SQUARE}>1:1 Social</option></select>
-                    </div>
+                )}{/* end selectedStudioPhase === genesis */}
+
+                {/* ════════════════════ MANIFEST ════════════════════ */}
+                {selectedStudioPhase === 'manifest' && (
+                  <div className="space-y-8">
+                    {project.scenes.length === 0 ? (
+                      <div className="nm-panel p-16 rounded-3xl border border-white/5 flex flex-col items-center text-center gap-6">
+                        <i className="fa-solid fa-seedling text-4xl text-mystic-gray opacity-40"></i>
+                        <div>
+                          <h3 className="text-xl font-black text-white uppercase tracking-tight font-mono">Script Not Analyzed</h3>
+                          <p className="text-sm text-celestial-stone mt-2">Analyze your script in the Genesis phase first to extract scenes and characters.</p>
+                        </div>
+                        <button onClick={() => setSelectedStudioPhase('genesis')} className="px-8 py-3 nm-button-gold text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-all">
+                          ← Back to Genesis
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <ProductionStageOverview project={project} />
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+                          <div className="lg:col-span-4 flex flex-col gap-6">
+                            <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={handleAddCharacter} onAudit={() => setActiveModal({ type: 'continuity_auditor' })} />
+                            <div className="nm-panel p-8 border border-white/5 bg-black/40">
+                              <h4 className="text-[10px] font-black text-white uppercase tracking-widest mb-6 flex items-center gap-3">
+                                <i className="fa-solid fa-stethoscope text-luna-gold"></i> Directorial Audit
+                              </h4>
+                              <div className="space-y-4">
+                                {/* Continuity Scan: meaningful only after character images exist */}
+                                <button
+                                  onClick={() => {
+                                    setActiveModal({ type: 'continuity_auditor' });
+                                    setProject(p => markStepCompleted('manifest', 'run_continuity_audit', p));
+                                  }}
+                                  disabled={!project.characters.some(c => c.referenceImageBase64)}
+                                  className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-luna-gold/30 transition-all border border-white/5 disabled:opacity-40"
+                                  title={!project.characters.some(c => c.referenceImageBase64) ? 'Generate character images first' : undefined}
+                                >
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Run Continuity Scan</span>
+                                  <i className="fa-solid fa-chevron-right text-[10px] text-luna-gold transition-transform group-hover:translate-x-1"></i>
+                                </button>
+                                {/* Narrative Diagnostic: script-level review, valid any time */}
+                                <button
+                                  onClick={() => {
+                                    setActiveModal({ type: 'script_doctor' });
+                                    setProject(p => markStepCompleted('genesis', 'run_script_doctor', p));
+                                  }}
+                                  className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-solar-amber/30 transition-all border border-white/5"
+                                >
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Narrative Diagnostic</span>
+                                  <i className="fa-solid fa-chevron-right text-[10px] text-solar-amber transition-transform group-hover:translate-x-1"></i>
+                                </button>
+                                <button
+                                  onClick={handleAssignShotList}
+                                  disabled={isAssigningShotList || project.scenes.length === 0}
+                                  className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-luna-gold/30 transition-all border border-white/5 disabled:opacity-40"
+                                >
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">
+                                    {isAssigningShotList ? 'Assigning Shots...' : 'Assign Shot List'}
+                                  </span>
+                                  <i className={`fa-solid ${isAssigningShotList ? 'fa-spinner fa-spin' : 'fa-camera-movie'} text-[10px] text-luna-gold`}></i>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="lg:col-span-8 space-y-6">
+                            <ProductionTimeline scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} />
+
+                            <div className="flex flex-wrap sm:flex-nowrap gap-4">
+                              <button onClick={() => setActiveModal({ type: 'storyboard' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
+                                <i className="fa-solid fa-grip text-luna-gold text-xl group-hover:scale-110 transition-transform"></i>
+                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Storyboard View</span>
+                              </button>
+                              <button onClick={() => setActiveModal({ type: 'asset_library' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
+                                <i className="fa-solid fa-photo-film text-solar-amber text-xl group-hover:scale-110 transition-transform"></i>
+                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Asset Registry</span>
+                              </button>
+                              <button onClick={() => setActiveModal({ type: 'manifest' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
+                                <i className="fa-solid fa-file-invoice text-deep-sage text-xl group-hover:scale-110 transition-transform"></i>
+                                <span className="text-[10px] font-black text-white uppercase tracking-widest">Production Protocol</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>{/* end manifest grid */}
+
+                        {/* Manifest → Synthesis CTA */}
+                        <PhaseCTA
+                          currentPhase="manifest"
+                          nextPhase="synthesis"
+                          nextPhaseLabel="Synthesis"
+                          items={manifestCTAItems}
+                          onNext={() => handleAdvancePhase('synthesis')}
+                          onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('What do I need to finish in Manifest before moving to Synthesis?'); }}
+                          canAdvance={project.characters.length > 0 && project.characters.every(c => c.voiceId)}
+                        />
+                      </>
+                    )}{/* end scenes.length > 0 */}
                   </div>
-                </div>
-              </div>
-            </div>{/* end genesis grid */}
+                )}{/* end selectedStudioPhase === manifest */}
 
-            {/* Genesis → Manifest CTA */}
-            <PhaseCTA
-              currentPhase="genesis"
-              nextPhase="manifest"
-              nextPhaseLabel="Manifest Cast"
-              items={genesisCTAItems}
-              onNext={() => handleAdvancePhase('manifest')}
-              onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('What do I need to finish in Genesis before I can move to Manifest?'); }}
-              canAdvance={project.scenes.length > 0}
-            />
-            </div>
-            )}{/* end selectedStudioPhase === genesis */}
+                {/* ════════════════════ SYNTHESIS ════════════════════ */}
+                {selectedStudioPhase === 'synthesis' && (
+                  <div className="space-y-8">
+                    <section className="space-y-10">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
+                        <div>
+                          <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Neural Synthesis Lab</h3>
+                          <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Manifesting visual and auditory temporal takes</p>
+                        </div>
+                        <div className="flex gap-4">
+                          {!isBatchProcessing ? (
+                            <button onClick={() => handleManifestAll()} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
+                              <i className="fa-solid fa-bolt-lightning animate-pulse"></i> Initialize Batch Manifest
+                            </button>
+                          ) : (
+                            <button onClick={handleCancelBatch} className="px-10 py-4 bg-solar-amber/20 border border-solar-amber text-solar-amber text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl hover:bg-solar-amber/30 active:scale-95 transition-all flex items-center gap-4">
+                              <i className="fa-solid fa-stop"></i> Cancel Batch
+                            </button>
+                          )}
+                          {/* Consistency Dashboard — post-synthesis character visual drift audit */}
+                          <button
+                            onClick={() => {
+                              setActiveModal({ type: 'consistency_dashboard' });
+                              setProject(p => markStepCompleted('synthesis', 'run_video_consistency_audit', p));
+                            }}
+                            disabled={batchCompletedCount === 0}
+                            title={batchCompletedCount === 0 ? 'Generate scenes first' : 'Audit character visual consistency across generated scenes'}
+                            className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-deep-sage border border-white/5 hover:text-white transition-all shadow-xl disabled:opacity-40"
+                          >
+                            <i className="fa-solid fa-eye"></i>
+                          </button>
+                          <button onClick={() => setActiveModal({ type: 'audio_mixer' })} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
+                            <i className="fa-solid fa-sliders"></i>
+                          </button>
+                        </div>
+                      </div>
 
-            {/* ════════════════════ MANIFEST ════════════════════ */}
-            {selectedStudioPhase === 'manifest' && (
-            <div className="space-y-8">
-            {project.scenes.length === 0 ? (
-              <div className="nm-panel p-16 rounded-3xl border border-white/5 flex flex-col items-center text-center gap-6">
-                <i className="fa-solid fa-seedling text-4xl text-mystic-gray opacity-40"></i>
-                <div>
-                  <h3 className="text-xl font-black text-white uppercase tracking-tight font-mono">Script Not Analyzed</h3>
-                  <p className="text-sm text-celestial-stone mt-2">Analyze your script in the Genesis phase first to extract scenes and characters.</p>
-                </div>
-                <button onClick={() => setSelectedStudioPhase('genesis')} className="px-8 py-3 nm-button-gold text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-all">
-                  ← Back to Genesis
-                </button>
-              </div>
-            ) : (
-            <>
-            <ProductionStageOverview project={project} />
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
-              <div className="lg:col-span-4 flex flex-col gap-6">
-                <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={handleAddCharacter} onAudit={() => setActiveModal({ type: 'continuity_auditor' })} />
-                    <div className="nm-panel p-8 border border-white/5 bg-black/40">
-                      <h4 className="text-[10px] font-black text-white uppercase tracking-widest mb-6 flex items-center gap-3">
-                        <i className="fa-solid fa-stethoscope text-luna-gold"></i> Directorial Audit
-                      </h4>
-                      <div className="space-y-4">
-                        {/* Continuity Scan: meaningful only after character images exist */}
-                        <button
-                          onClick={() => {
-                            setActiveModal({ type: 'continuity_auditor' });
-                            setProject(p => markStepCompleted('manifest', 'run_continuity_audit', p));
-                          }}
-                          disabled={!project.characters.some(c => c.referenceImageBase64)}
-                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-luna-gold/30 transition-all border border-white/5 disabled:opacity-40"
-                          title={!project.characters.some(c => c.referenceImageBase64) ? 'Generate character images first' : undefined}
-                        >
-                          <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Run Continuity Scan</span>
-                          <i className="fa-solid fa-chevron-right text-[10px] text-luna-gold transition-transform group-hover:translate-x-1"></i>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+                        {project.scenes.map((scene, idx) => (
+                          <ErrorBoundary key={scene.id}>
+                            <div id={`scene-${scene.id}`} className="relative group/card-container transition-all hover:scale-[1.02] duration-500">
+                              <SceneCard
+                                index={idx} totalScenes={project.scenes.length} scene={scene} asset={project.assets[scene.id]} characters={project.characters}
+                                onGenerate={handleGenerateSceneAsset}
+                                onExtend={handleExtendScene}
+                                onRetryImage={handleRetryImage}
+                                onRetryVideo={handleRetryVideo}
+                                onRetryAudio={handleRetryAudio}
+                                onUpdate={(id, s) => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === id ? s : sc) }))}
+                                onMove={(dir) => handleMoveScene(scene.id, dir)}
+                                onDelete={(id) => setProject(p => ({ ...p, scenes: p.scenes.filter(s => s.id !== id) }))}
+                                onDuplicate={() => { const newId = Date.now(); setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: newId }], assets: { ...p.assets, [newId]: { status: 'pending', variants: [] } } })); }}
+                                onInspect={setInspectingScene}
+                                onSelectVariant={handleSelectVariant}
+                                onClearAsset={handleClearAsset}
+                                isProcessing={project.assets[scene.id]?.status?.startsWith('generating') ?? false} globalStyle={project.globalStyle}
+                              />
+                              {project.assets[scene.id]?.imageUrl && (
+                                <button
+                                  onClick={() => handleSetKeyArt(scene.id)}
+                                  className={`absolute top-4 right-4 z-20 w-8 h-8 rounded-lg flex items-center justify-center transition-all ${project.keyArtSceneId === scene.id ? 'bg-luna-gold text-white shadow-nm-gold' : 'nm-button bg-black/60 text-mystic-gray hover:text-white opacity-0 group-hover/card-container:opacity-100'}`}
+                                  title="Set as Master Style Reference"
+                                >
+                                  <i className="fa-solid fa-camera-retro text-[10px]"></i>
+                                </button>
+                              )}
+                            </div>
+                          </ErrorBoundary>
+                        ))}
+                      </div>
+                    </section>{/* end synthesis scene grid */}
+
+                    {/* Synthesis → Post CTA */}
+                    <PhaseCTA
+                      currentPhase="synthesis"
+                      nextPhase="post"
+                      nextPhaseLabel="Post-Production"
+                      items={synthesisCTAItems}
+                      onNext={() => handleAdvancePhase('post')}
+                      onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('My synthesis phase status: what needs attention before post-production?'); }}
+                      canAdvance={batchCompletedCount > 0}
+                    />
+                  </div>
+                )}{/* end selectedStudioPhase === synthesis */}
+
+                {/* ════════════════════ POST ════════════════════ */}
+                {selectedStudioPhase === 'post' && (
+                  <div className="space-y-8">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
+                      <div>
+                        <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Post-Production & Release</h3>
+                        <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Neural mastering and distribution multipliers</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => setActiveModal({ type: 'directorial_deck' })} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg" title="Directorial Deck">
+                          <i className="fa-solid fa-chart-line"></i>
                         </button>
-                        {/* Narrative Diagnostic: script-level review, valid any time */}
-                        <button
-                          onClick={() => {
-                            setActiveModal({ type: 'script_doctor' });
-                            setProject(p => markStepCompleted('genesis', 'run_script_doctor', p));
-                          }}
-                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-solar-amber/30 transition-all border border-white/5"
-                        >
-                          <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Narrative Diagnostic</span>
-                          <i className="fa-solid fa-chevron-right text-[10px] text-solar-amber transition-transform group-hover:translate-x-1"></i>
+                        <button onClick={() => setActiveModal({ type: 'vfx' })} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
+                          <i className="fa-solid fa-wand-magic-sparkles"></i> VFX Synthesis Lab
                         </button>
-                        <button
-                          onClick={handleAssignShotList}
-                          disabled={isAssigningShotList || project.scenes.length === 0}
-                          className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-luna-gold/30 transition-all border border-white/5 disabled:opacity-40"
-                        >
-                          <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">
-                            {isAssigningShotList ? 'Assigning Shots...' : 'Assign Shot List'}
-                          </span>
-                          <i className={`fa-solid ${isAssigningShotList ? 'fa-spinner fa-spin' : 'fa-camera-movie'} text-[10px] text-luna-gold`}></i>
+                        <button onClick={() => setActiveModal({ type: 'audio_mixer' })} className="px-8 py-3 nm-button text-solar-amber border border-solar-amber/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-solar-amber hover:text-white transition-all flex items-center gap-3">
+                          <i className="fa-solid fa-sliders"></i> Audio Mix
                         </button>
                       </div>
                     </div>
-                  </div>
-                  <div className="lg:col-span-8 space-y-6">
-                    <ProductionTimeline scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} />
 
-                    <div className="flex flex-wrap sm:flex-nowrap gap-4">
-                      <button onClick={() => setActiveModal({ type: 'storyboard' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
-                        <i className="fa-solid fa-grip text-luna-gold text-xl group-hover:scale-110 transition-transform"></i>
-                        <span className="text-[10px] font-black text-white uppercase tracking-widest">Storyboard View</span>
-                      </button>
-                      <button onClick={() => setActiveModal({ type: 'asset_library' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
-                        <i className="fa-solid fa-photo-film text-solar-amber text-xl group-hover:scale-110 transition-transform"></i>
-                        <span className="text-[10px] font-black text-white uppercase tracking-widest">Asset Registry</span>
-                      </button>
-                      <button onClick={() => setActiveModal({ type: 'manifest' })} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
-                        <i className="fa-solid fa-file-invoice text-deep-sage text-xl group-hover:scale-110 transition-transform"></i>
-                        <span className="text-[10px] font-black text-white uppercase tracking-widest">Production Protocol</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>{/* end manifest grid */}
+                    {project.youtubeMetadata && (
+                      <YouTubeOptimizer
+                        metadata={project.youtubeMetadata}
+                        script={project.script}
+                        characters={project.characters}
+                        globalStyle={project.globalStyle || "Cinematic"}
+                        viralData={project.viralData}
+                        onUpdateViral={(data) => setProject(p => ({ ...p, viralData: data }))}
+                      />
+                    )}
 
-              {/* Manifest → Synthesis CTA */}
-              <PhaseCTA
-                currentPhase="manifest"
-                nextPhase="synthesis"
-                nextPhaseLabel="Synthesis"
-                items={manifestCTAItems}
-                onNext={() => handleAdvancePhase('synthesis')}
-                onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('What do I need to finish in Manifest before moving to Synthesis?'); }}
-                canAdvance={project.characters.length > 0 && project.characters.every(c => c.voiceId)}
-              />
-            </>
-            )}{/* end scenes.length > 0 */}
-            </div>
-            )}{/* end selectedStudioPhase === manifest */}
-
-            {/* ════════════════════ SYNTHESIS ════════════════════ */}
-            {selectedStudioPhase === 'synthesis' && (
-            <div className="space-y-8">
-            <section className="space-y-10">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
-                    <div>
-                      <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Neural Synthesis Lab</h3>
-                      <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Manifesting visual and auditory temporal takes</p>
-                    </div>
-                    <div className="flex gap-4">
-                      {!isBatchProcessing ? (
-                        <button onClick={() => handleManifestAll()} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
-                          <i className="fa-solid fa-bolt-lightning animate-pulse"></i> Initialize Batch Manifest
-                        </button>
-                      ) : (
-                        <button onClick={handleCancelBatch} className="px-10 py-4 bg-solar-amber/20 border border-solar-amber text-solar-amber text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl hover:bg-solar-amber/30 active:scale-95 transition-all flex items-center gap-4">
-                          <i className="fa-solid fa-stop"></i> Cancel Batch
-                        </button>
-                      )}
-                      {/* Consistency Dashboard — post-synthesis character visual drift audit */}
-                      <button
-                        onClick={() => {
-                          setActiveModal({ type: 'consistency_dashboard' });
-                          setProject(p => markStepCompleted('synthesis', 'run_video_consistency_audit', p));
-                        }}
-                        disabled={batchCompletedCount === 0}
-                        title={batchCompletedCount === 0 ? 'Generate scenes first' : 'Audit character visual consistency across generated scenes'}
-                        className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-deep-sage border border-white/5 hover:text-white transition-all shadow-xl disabled:opacity-40"
-                      >
-                        <i className="fa-solid fa-eye"></i>
-                      </button>
-                      <button onClick={() => setActiveModal({ type: 'audio_mixer' })} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
-                        <i className="fa-solid fa-sliders"></i>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
-                    {project.scenes.map((scene, idx) => (
-                      <ErrorBoundary key={scene.id}>
-                        <div id={`scene-${scene.id}`} className="relative group/card-container transition-all hover:scale-[1.02] duration-500">
-                          <SceneCard
-                            index={idx} totalScenes={project.scenes.length} scene={scene} asset={project.assets[scene.id]} characters={project.characters}
-                            onGenerate={handleGenerateSceneAsset}
-                            onExtend={handleExtendScene}
-                            onRetryImage={handleRetryImage}
-                            onRetryVideo={handleRetryVideo}
-                            onRetryAudio={handleRetryAudio}
-                            onUpdate={(id, s) => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === id ? s : sc) }))}
-                            onMove={(dir) => handleMoveScene(scene.id, dir)}
-                            onDelete={(id) => setProject(p => ({ ...p, scenes: p.scenes.filter(s => s.id !== id) }))}
-                            onDuplicate={() => { const newId = Date.now(); setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: newId }], assets: { ...p.assets, [newId]: { status: 'pending', variants: [] } } })); }}
-                            onInspect={setInspectingScene}
-                            onSelectVariant={handleSelectVariant}
-                            onClearAsset={handleClearAsset}
-                            isProcessing={project.assets[scene.id]?.status?.startsWith('generating') ?? false} globalStyle={project.globalStyle}
-                          />
-                          {project.assets[scene.id]?.imageUrl && (
-                            <button
-                              onClick={() => handleSetKeyArt(scene.id)}
-                              className={`absolute top-4 right-4 z-20 w-8 h-8 rounded-lg flex items-center justify-center transition-all ${project.keyArtSceneId === scene.id ? 'bg-luna-gold text-white shadow-nm-gold' : 'nm-button bg-black/60 text-mystic-gray hover:text-white opacity-0 group-hover/card-container:opacity-100'}`}
-                              title="Set as Master Style Reference"
-                            >
-                              <i className="fa-solid fa-camera-retro text-[10px]"></i>
-                            </button>
-                          )}
+                    <div className="flex justify-center pt-10">
+                      <div className="w-full max-w-4xl nm-panel p-10 sm:p-16 rounded-[4rem] border border-white/5 relative overflow-hidden bg-gradient-to-t from-luna-gold/5 to-transparent flex flex-col items-center text-center shadow-2xl">
+                        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-16 bg-gradient-to-b from-luna-gold to-transparent opacity-40"></div>
+                        <h4 className="text-2xl font-black text-white uppercase tracking-widest font-mono italic mb-6">Master Production Unit</h4>
+                        <p className="text-sm text-celestial-stone max-w-lg mb-12 font-light">The neural tracks are ready for final merge. Initializing the export will compile all visual takes, audio signals, and VFX mastering into a single master distribution unit.</p>
+                        <div className="flex flex-col sm:flex-row gap-6 w-full sm:w-auto">
+                          <button
+                            onClick={() => setActiveModal({ type: 'player' })}
+                            className="px-12 py-5 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] hover:bg-white/5 transition-all flex items-center justify-center gap-4 border border-white/10"
+                          >
+                            <i className="fa-solid fa-desktop"></i> Pre-Production Review
+                          </button>
+                          <button
+                            onClick={() => setActiveModal({ type: 'renderer' })}
+                            disabled={!isAllComplete}
+                            className="px-16 py-5 bg-gold-gradient text-white rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-30 disabled:hover:scale-100"
+                          >
+                            <i className="fa-solid fa-clapperboard"></i> Initialize Master Export
+                          </button>
                         </div>
-                      </ErrorBoundary>
-                    ))}
+                      </div>
+                    </div>
                   </div>
-                </section>{/* end synthesis scene grid */}
+                )}{/* end selectedStudioPhase === post */}
 
-              {/* Synthesis → Post CTA */}
-              <PhaseCTA
-                currentPhase="synthesis"
-                nextPhase="post"
-                nextPhaseLabel="Post-Production"
-                items={synthesisCTAItems}
-                onNext={() => handleAdvancePhase('post')}
-                onDirectorHelp={() => { setChatOpen(true); setDirectorInjection('My synthesis phase status: what needs attention before post-production?'); }}
-                canAdvance={batchCompletedCount > 0}
-              />
-            </div>
-            )}{/* end selectedStudioPhase === synthesis */}
-
-            {/* ════════════════════ POST ════════════════════ */}
-            {selectedStudioPhase === 'post' && (
-            <div className="space-y-8">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
-              <div>
-                <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Post-Production & Release</h3>
-                <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Neural mastering and distribution multipliers</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <button onClick={() => setActiveModal({ type: 'directorial_deck' })} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg" title="Directorial Deck">
-                  <i className="fa-solid fa-chart-line"></i>
-                </button>
-                <button onClick={() => setActiveModal({ type: 'vfx' })} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
-                  <i className="fa-solid fa-wand-magic-sparkles"></i> VFX Synthesis Lab
-                </button>
-                <button onClick={() => setActiveModal({ type: 'audio_mixer' })} className="px-8 py-3 nm-button text-solar-amber border border-solar-amber/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-solar-amber hover:text-white transition-all flex items-center gap-3">
-                  <i className="fa-solid fa-sliders"></i> Audio Mix
-                </button>
               </div>
             </div>
+          )}{/* end view === dashboard */}
+        </div>{/* end main content */}
 
-            {project.youtubeMetadata && (
-              <YouTubeOptimizer
-                metadata={project.youtubeMetadata}
-                script={project.script}
-                characters={project.characters}
-                globalStyle={project.globalStyle || "Cinematic"}
-                viralData={project.viralData}
-                onUpdateViral={(data) => setProject(p => ({ ...p, viralData: data }))}
-              />
-            )}
-
-            <div className="flex justify-center pt-10">
-              <div className="w-full max-w-4xl nm-panel p-10 sm:p-16 rounded-[4rem] border border-white/5 relative overflow-hidden bg-gradient-to-t from-luna-gold/5 to-transparent flex flex-col items-center text-center shadow-2xl">
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-16 bg-gradient-to-b from-luna-gold to-transparent opacity-40"></div>
-                <h4 className="text-2xl font-black text-white uppercase tracking-widest font-mono italic mb-6">Master Production Unit</h4>
-                <p className="text-sm text-celestial-stone max-w-lg mb-12 font-light">The neural tracks are ready for final merge. Initializing the export will compile all visual takes, audio signals, and VFX mastering into a single master distribution unit.</p>
-                <div className="flex flex-col sm:flex-row gap-6 w-full sm:w-auto">
-                  <button
-                    onClick={() => setActiveModal({ type: 'player' })}
-                    className="px-12 py-5 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] hover:bg-white/5 transition-all flex items-center justify-center gap-4 border border-white/10"
-                  >
-                    <i className="fa-solid fa-desktop"></i> Pre-Production Review
-                  </button>
-                  <button
-                    onClick={() => setActiveModal({ type: 'renderer' })}
-                    disabled={!isAllComplete}
-                    className="px-16 py-5 bg-gold-gradient text-white rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-30 disabled:hover:scale-100"
-                  >
-                    <i className="fa-solid fa-clapperboard"></i> Initialize Master Export
-                  </button>
-                </div>
-              </div>
-            </div>
-            </div>
-            )}{/* end selectedStudioPhase === post */}
-
-            </div>
-          </div>
-        )}{/* end view === dashboard */}
-      </div>{/* end main content */}
-
-      {/* ── PERSISTENT DIRECTOR SIDEBAR ─────────────────────────────────── */}
-      <ErrorBoundary>
-        <DirectorSidebar
-          isOpen={chatOpen}
-          onToggle={() => setChatOpen(prev => !prev)}
-          currentPhase={activePhase}
-          project={project}
-          onExecuteTool={handleToolExecution}
-          productionLog={project.productionLog}
-          pendingInjection={directorInjection}
-          onClearInjection={() => setDirectorInjection(null)}
-          onGenerateCharacters={async () => {
-            const charsToGenerate = project.characters.filter(c => !c.referenceImageBase64);
-            for (const char of charsToGenerate) {
-              try {
-                const img = await generateCharacterImage(char, resolution, project.globalStyle || 'Cinematic', project.productionSeed);
-                // Commit image and mark as approved so DNA synthesis is unlocked
-                setProject(prev => ({
-                  ...prev,
-                  characters: prev.characters.map(c => c.id === char.id
-                    ? { ...c, referenceImageBase64: img, referenceImageApproved: true }
-                    : c)
-                }));
-                addLog(`Generated image for ${char.name}. Synthesizing identity lock...`, 'success');
-                // Synthesize CharacterDNA to lock the visual identity for cross-scene consistency
+        {/* ── PERSISTENT DIRECTOR SIDEBAR ─────────────────────────────────── */}
+        <ErrorBoundary>
+          <DirectorSidebar
+            isOpen={chatOpen}
+            onToggle={() => setChatOpen(prev => !prev)}
+            currentPhase={activePhase}
+            project={project}
+            onExecuteTool={handleToolExecution}
+            productionLog={project.productionLog}
+            pendingInjection={directorInjection}
+            onClearInjection={() => setDirectorInjection(null)}
+            onGenerateCharacters={async () => {
+              const charsToGenerate = project.characters.filter(c => !c.referenceImageBase64);
+              for (const char of charsToGenerate) {
                 try {
-                  const charWithImage = { ...char, referenceImageBase64: img, referenceImageApproved: true as const };
-                  const dna = await synthesizeCharacterDNA(charWithImage, project.globalStyle || 'Cinematic', project.productionSeed);
+                  const img = await generateCharacterImage(char, resolution, project.globalStyle || 'Cinematic', project.productionSeed);
+                  // Commit image and mark as approved so DNA synthesis is unlocked
                   setProject(prev => ({
                     ...prev,
-                    characters: prev.characters.map(c => c.id === char.id ? { ...c, characterDNA: dna } : c)
+                    characters: prev.characters.map(c => c.id === char.id
+                      ? { ...c, referenceImageBase64: img, referenceImageApproved: true }
+                      : c)
                   }));
-                  addLog(`Character DNA locked for "${char.name}". Cross-scene consistency active.`, 'success');
-                } catch (dnaErr: any) {
-                  addLog(`DNA synthesis failed for "${char.name}" (non-blocking): ${dnaErr.message?.substring(0, 60)}`, 'error');
+                  addLog(`Generated image for ${char.name}. Synthesizing identity lock...`, 'success');
+                  // Synthesize CharacterDNA to lock the visual identity for cross-scene consistency
+                  try {
+                    const charWithImage = { ...char, referenceImageBase64: img, referenceImageApproved: true as const };
+                    const dna = await synthesizeCharacterDNA(charWithImage, project.globalStyle || 'Cinematic', project.productionSeed);
+                    setProject(prev => ({
+                      ...prev,
+                      characters: prev.characters.map(c => c.id === char.id ? { ...c, characterDNA: dna } : c)
+                    }));
+                    addLog(`Character DNA locked for "${char.name}". Cross-scene consistency active.`, 'success');
+                  } catch (dnaErr: any) {
+                    addLog(`DNA synthesis failed for "${char.name}" (non-blocking): ${dnaErr.message?.substring(0, 60)}`, 'error');
+                  }
+                } catch (e: any) {
+                  addLog(`Image generation failed for ${char.name}: ${e.message?.substring(0, 80)}`, 'error');
                 }
-              } catch (e: any) {
-                addLog(`Image generation failed for ${char.name}: ${e.message?.substring(0, 80)}`, 'error');
               }
-            }
-          }}
-          onGenerateScenes={async () => {
-            await handleManifestAll();
-          }}
-        />
-      </ErrorBoundary>
-
-      {/* ── QUALITY GATE MODAL (top-level, not inside aside) ─────────────── */}
-      <QualityGateModal
-        visible={qualityGateModal.visible}
-        gates={qualityGateModal.gates}
-        targetPhase={qualityGateModal.targetPhase || 'post'}
-        onClose={() => setQualityGateModal(prev => ({ ...prev, visible: false }))}
-        onProceed={() => {
-          setQualityGateModal(prev => ({ ...prev, visible: false }));
-          if (qualityGateModal.targetPhase) handleNavigatePhase(qualityGateModal.targetPhase);
-        }}
-        onFixGate={async (_gateOrId) => { /* auto-fix placeholder */ }}
-        onOverride={() => {
-          if (qualityGateModal.targetPhase) {
-            handleNavigatePhase(qualityGateModal.targetPhase);
-            setQualityGateModal(prev => ({ ...prev, visible: false }));
-          }
-        }}
-      />
-
-      {/* ── MODALS (single activeModal slot) ─────────────────────────────── */}
-      {/* Each lazy modal gets its own Suspense so a first-load chunk fetch
-          doesn't replace the entire main content with the loading spinner. */}
-      <Suspense fallback={null}>
-      {editingCharacter && (
-        <CharacterModal
-          character={editingCharacter}
-          globalStyle={project.globalStyle}
-          onClose={() => setEditingCharacter(null)}
-          onSave={handleCharacterSave}
-          onRegenerateImage={async (id) => {
-            const char = project.characters.find(c => c.id === id)!;
-            const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed);
-            handleCharacterSave({ ...char, referenceImageBase64: img });
-          }}
-        />
-      )}
-      {inspectingScene && (
-        <SceneInspector
-          scene={inspectingScene}
-          characters={project.characters}
-          assetImage={project.assets[inspectingScene.id]?.imageUrl}
-          onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))}
-          onClose={() => setInspectingScene(null)}
-        />
-      )}
-      {activeModal?.type === 'asset_library' && (
-        <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={closeModal} onSelect={sceneId => { closeModal(); scrollToScene(sceneId); }} />
-      )}
-      {activeModal?.type === 'audio_mixer' && (
-        <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'continuity_auditor' && (
-        <ContinuityAuditor
-          project={project}
-          onSyncPrompts={(id, prompt) => setProject(p => { const charName = p.characters.find(c => c.id === id)?.name; if (!charName) return p; return { ...p, scenes: p.scenes.map(s => (s.charactersInScene || []).includes(charName) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }; })}
-          onMarkScenesForRegeneration={handleMarkScenesForRegeneration}
-          onClose={closeModal}
-        />
-      )}
-      {activeModal?.type === 'consistency_dashboard' && (
-        <ConsistencyDashboard project={project} onUpdateConsistencyScores={handleUpdateConsistencyScores} onMarkScenesForRegeneration={handleMarkScenesForRegeneration} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'directorial_deck' && (
-        <DirectorialDeck project={project} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'broll' && (
-        <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'storyboard' && (
-        <StoryboardView scenes={project.scenes} assets={project.assets} onSelectScene={sceneId => { closeModal(); scrollToScene(sceneId); }} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'script_doctor' && (
-        <ScriptDoctor project={project} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'vfx' && (
-        <VFXMaster
-          mastering={project.mastering}
-          cinematicProfile={project.cinematicProfile}
-          lightingBrief={project.lightingBrief}
-          onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))}
-          onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))}
-          onUpdateLightingBrief={brief => setProject(prev => ({ ...prev, lightingBrief: brief }))}
-          onClose={closeModal}
-        />
-      )}
-      {activeModal?.type === 'manifest' && (
-        <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'player' && (
-        <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={closeModal} />
-      )}
-      {activeModal?.type === 'renderer' && (
-        <ErrorBoundary>
-          <Renderer
-            scenes={project.scenes}
-            assets={project.assets}
-            resolution={resolution}
-            aspectRatio={aspectRatio}
-            globalStyle={project.globalStyle || "Cinematic"}
-            mastering={project.mastering}
-            cinematicProfile={project.cinematicProfile}
-            outputFormat={serverRenderMode}
-            onCancel={closeModal}
-            onComplete={() => { }}
+            }}
+            onGenerateScenes={async () => {
+              await handleManifestAll();
+            }}
           />
         </ErrorBoundary>
-      )}
-      {project.activeDraft && (
-        <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />
-      )}
 
-      {/* Resume Batch Dialog */}
-      {showResumeDialog && pendingBatchQueue && (
-        <div className="fixed inset-0 z-[500] bg-eclipse-black/90 backdrop-blur-xl flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-300">
-          <div className="w-full max-w-lg nm-panel p-10 rounded-[3rem] border border-white/5 shadow-[0_50px_200px_rgba(0,0,0,0.9)]">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-solar-amber/20">
-                <i className="fa-solid fa-rotate-right text-xl"></i>
-              </div>
-              <div>
-                <h2 className="text-2xl font-black text-white uppercase tracking-tight font-mono">Resume Batch Generation?</h2>
-                <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-1">Unfinished Progress Detected</p>
-              </div>
-            </div>
+        {/* ── QUALITY GATE MODAL (top-level, not inside aside) ─────────────── */}
+        <QualityGateModal
+          visible={qualityGateModal.visible}
+          gates={qualityGateModal.gates}
+          targetPhase={qualityGateModal.targetPhase || 'post'}
+          onClose={() => setQualityGateModal(prev => ({ ...prev, visible: false }))}
+          onProceed={() => {
+            setQualityGateModal(prev => ({ ...prev, visible: false }));
+            if (qualityGateModal.targetPhase) handleNavigatePhase(qualityGateModal.targetPhase);
+          }}
+          onFixGate={async (_gateOrId) => { /* auto-fix placeholder */ }}
+          onOverride={() => {
+            if (qualityGateModal.targetPhase) {
+              handleNavigatePhase(qualityGateModal.targetPhase);
+              setQualityGateModal(prev => ({ ...prev, visible: false }));
+            }
+          }}
+        />
 
-            <div className="space-y-4 mb-8">
-              <div className="p-5 rounded-2xl bg-white/5 border border-white/5">
-                <div className="grid grid-cols-3 gap-4 text-center">
-                  <div>
-                    <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-widest mb-1">Completed</p>
-                    <p className="text-2xl font-black text-deep-sage font-mono">{pendingBatchQueue.completed.length}</p>
+        {/* ── MODALS (single activeModal slot) ─────────────────────────────── */}
+        {/* Each lazy modal gets its own Suspense so a first-load chunk fetch
+          doesn't replace the entire main content with the loading spinner. */}
+        <Suspense fallback={null}>
+          {editingCharacter && (
+            <CharacterModal
+              character={editingCharacter}
+              globalStyle={project.globalStyle}
+              onClose={() => setEditingCharacter(null)}
+              onSave={handleCharacterSave}
+              onRegenerateImage={async (id) => {
+                const char = project.characters.find(c => c.id === id)!;
+                const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed);
+                handleCharacterSave({ ...char, referenceImageBase64: img });
+              }}
+            />
+          )}
+          {inspectingScene && (
+            <SceneInspector
+              scene={inspectingScene}
+              characters={project.characters}
+              assetImage={project.assets[inspectingScene.id]?.imageUrl}
+              onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))}
+              onClose={() => setInspectingScene(null)}
+            />
+          )}
+          {activeModal?.type === 'asset_library' && (
+            <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={closeModal} onSelect={sceneId => { closeModal(); scrollToScene(sceneId); }} />
+          )}
+          {activeModal?.type === 'audio_mixer' && (
+            <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'continuity_auditor' && (
+            <ContinuityAuditor
+              project={project}
+              onSyncPrompts={(id, prompt) => setProject(p => { const charName = p.characters.find(c => c.id === id)?.name; if (!charName) return p; return { ...p, scenes: p.scenes.map(s => (s.charactersInScene || []).includes(charName) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }; })}
+              onMarkScenesForRegeneration={handleMarkScenesForRegeneration}
+              onClose={closeModal}
+            />
+          )}
+          {activeModal?.type === 'consistency_dashboard' && (
+            <ConsistencyDashboard project={project} onUpdateConsistencyScores={handleUpdateConsistencyScores} onMarkScenesForRegeneration={handleMarkScenesForRegeneration} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'directorial_deck' && (
+            <DirectorialDeck project={project} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'broll' && (
+            <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'storyboard' && (
+            <StoryboardView scenes={project.scenes} assets={project.assets} onSelectScene={sceneId => { closeModal(); scrollToScene(sceneId); }} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'script_doctor' && (
+            <ScriptDoctor project={project} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'vfx' && (
+            <VFXMaster
+              mastering={project.mastering}
+              cinematicProfile={project.cinematicProfile}
+              lightingBrief={project.lightingBrief}
+              onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))}
+              onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))}
+              onUpdateLightingBrief={brief => setProject(prev => ({ ...prev, lightingBrief: brief }))}
+              onClose={closeModal}
+            />
+          )}
+          {activeModal?.type === 'manifest' && (
+            <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'player' && (
+            <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={closeModal} />
+          )}
+          {activeModal?.type === 'renderer' && (
+            <ErrorBoundary>
+              <Renderer
+                scenes={project.scenes}
+                assets={project.assets}
+                resolution={resolution}
+                aspectRatio={aspectRatio}
+                globalStyle={project.globalStyle || "Cinematic"}
+                mastering={project.mastering}
+                cinematicProfile={project.cinematicProfile}
+                outputFormat={serverRenderMode}
+                onCancel={closeModal}
+                onComplete={() => { }}
+              />
+            </ErrorBoundary>
+          )}
+          {project.activeDraft && (
+            <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />
+          )}
+
+          {/* Resume Batch Dialog */}
+          {showResumeDialog && pendingBatchQueue && (
+            <div className="fixed inset-0 z-[500] bg-eclipse-black/90 backdrop-blur-xl flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-300">
+              <div className="w-full max-w-lg nm-panel p-10 rounded-[3rem] border border-white/5 shadow-[0_50px_200px_rgba(0,0,0,0.9)]">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-solar-amber/20">
+                    <i className="fa-solid fa-rotate-right text-xl"></i>
                   </div>
                   <div>
-                    <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-widest mb-1">Remaining</p>
-                    <p className="text-2xl font-black text-solar-amber font-mono">{pendingBatchQueue.pending.length}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-widest mb-1">Failed</p>
-                    <p className="text-2xl font-black text-solar-amber font-mono">{pendingBatchQueue.failed.length}</p>
+                    <h2 className="text-2xl font-black text-white uppercase tracking-tight font-mono">Resume Batch Generation?</h2>
+                    <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-1">Unfinished Progress Detected</p>
                   </div>
                 </div>
+
+                <div className="space-y-4 mb-8">
+                  <div className="p-5 rounded-2xl bg-white/5 border border-white/5">
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div>
+                        <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-widest mb-1">Completed</p>
+                        <p className="text-2xl font-black text-deep-sage font-mono">{pendingBatchQueue.completed.length}</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-widest mb-1">Remaining</p>
+                        <p className="text-2xl font-black text-solar-amber font-mono">{pendingBatchQueue.pending.length}</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-mystic-gray uppercase font-bold tracking-widest mb-1">Failed</p>
+                        <p className="text-2xl font-black text-solar-amber font-mono">{pendingBatchQueue.failed.length}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-celestial-stone leading-relaxed italic text-center">
+                    Your previous batch generation was interrupted. You can resume where you left off or start a fresh batch.
+                  </p>
+                </div>
+
+                <div className="flex gap-4">
+                  <button
+                    onClick={() => {
+                      clearBatchQueue();
+                      setShowResumeDialog(false);
+                    }}
+                    className="flex-1 px-6 py-4 nm-button text-celestial-stone rounded-2xl font-black uppercase text-[10px] tracking-[0.3em] hover:text-white transition-all"
+                  >
+                    Start Fresh
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowResumeDialog(false);
+                      handleManifestAll(pendingBatchQueue);
+                    }}
+                    className="flex-1 px-6 py-4 nm-button-gold text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.3em] shadow-nm-gold hover:scale-105 active:scale-95 transition-all"
+                  >
+                    Resume ({pendingBatchQueue.pending.length} Left)
+                  </button>
+                </div>
               </div>
-
-              <p className="text-[11px] text-celestial-stone leading-relaxed italic text-center">
-                Your previous batch generation was interrupted. You can resume where you left off or start a fresh batch.
-              </p>
             </div>
+          )}
 
-            <div className="flex gap-4">
-              <button
-                onClick={() => {
-                  clearBatchQueue();
-                  setShowResumeDialog(false);
-                }}
-                className="flex-1 px-6 py-4 nm-button text-celestial-stone rounded-2xl font-black uppercase text-[10px] tracking-[0.3em] hover:text-white transition-all"
-              >
-                Start Fresh
-              </button>
-              <button
-                onClick={() => {
-                  setShowResumeDialog(false);
-                  handleManifestAll(pendingBatchQueue);
-                }}
-                className="flex-1 px-6 py-4 nm-button-gold text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.3em] shadow-nm-gold hover:scale-105 active:scale-95 transition-all"
-              >
-                Resume ({pendingBatchQueue.pending.length} Left)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      </Suspense>{/* end modal Suspense */}
+        </Suspense>{/* end modal Suspense */}
       </Suspense>{/* end main content Suspense */}
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} />
     </Layout>

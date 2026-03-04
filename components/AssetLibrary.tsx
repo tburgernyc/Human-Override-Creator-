@@ -20,7 +20,7 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ assets, scenes, onCl
   return (
     <div className="fixed inset-0 z-[400] bg-eclipse-black/95 backdrop-blur-3xl flex items-center justify-center p-6 animate-in fade-in duration-500">
       <div className="w-full max-w-6xl h-full max-h-[85vh] nm-panel flex flex-col overflow-hidden border border-white/5">
-        
+
         <div className="p-8 border-b border-white/5 flex justify-between items-center bg-white/5">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-luna-gold/10 border border-luna-gold/30 flex items-center justify-center text-luna-gold">
@@ -45,14 +45,14 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ assets, scenes, onCl
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
               {allAssets.map(({ scene, asset }) => (
-                <div 
-                  key={scene.id} 
+                <div
+                  key={scene.id}
                   onClick={() => onSelect(scene.id)}
                   className="nm-card overflow-hidden group cursor-pointer border border-white/5 hover:border-luna-gold/40"
                 >
                   <div className="aspect-video bg-black relative">
                     {asset.videoUrl ? (
-                      <video src={asset.videoUrl} className="w-full h-full object-cover" muted loop onMouseOver={e => e.currentTarget.play()} onMouseOut={e => {e.currentTarget.pause(); e.currentTarget.currentTime = 0;}} />
+                      <video src={asset.videoUrl} className="w-full h-full object-cover" muted loop onMouseOver={e => e.currentTarget.play()} onMouseOut={e => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }} />
                     ) : asset.imageUrl ? (
                       <img src={asset.imageUrl} className="w-full h-full object-cover" alt="Preview" />
                     ) : (
@@ -77,7 +77,9 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ assets, scenes, onCl
         </div>
 
         <div className="p-8 border-t border-white/5 bg-white/5 flex justify-end">
-          <button onClick={onClose} className="px-10 py-3 bg-white text-black rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-2xl hover:bg-luna-gold hover:text-white transition-all">Dismiss Registry</button>
+          <button onClick={onClose} className="px-10 py-3 bg-white text-black rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-2xl hover:bg-luna-gold hover:text-white transition-all">
+            <i className="fa-solid fa-arrow-left mr-2"></i> Back
+          </button>
         </div>
       </div>
     </div>

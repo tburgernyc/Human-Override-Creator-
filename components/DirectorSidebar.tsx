@@ -92,126 +92,132 @@ export const DirectorSidebar: React.FC<DirectorSidebarProps> = ({
 
   return (
     <div
-      className="fixed right-0 top-0 bottom-0 z-[150] flex flex-col transition-all duration-300 ease-in-out"
+      className="fixed right-0 top-0 bottom-0 z-[150] flex flex-col transition-all duration-300 ease-in-out pointer-events-none"
       style={{
-        width: isOpen ? '420px' : '52px',
-        background: '#0a0e1a',
-        borderLeft: `1px solid ${isOpen ? 'rgba(0,212,255,0.12)' : 'rgba(255,255,255,0.04)'}`,
-        boxShadow: isOpen ? '-4px 0 40px rgba(0,0,0,0.6)' : 'none',
+        width: isOpen ? '650px' : '52px',
+        background: isOpen ? 'transparent' : '#0a0e1a',
+        borderLeft: `1px solid ${isOpen ? 'transparent' : 'rgba(255,255,255,0.04)'}`,
+        boxShadow: 'none',
+        pointerEvents: isOpen ? 'none' : 'auto',
       }}
     >
       {/* ── Collapsed Strip ───────────────────────────────── */}
-      {!isOpen && (
-        <div className="flex flex-col items-center gap-4 pt-24 pb-8 h-full">
-          <button
-            onClick={onToggle}
-            className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110"
-            style={{ background: 'rgba(0,212,255,0.08)', border: '1px solid rgba(0,212,255,0.2)' }}
-            title="Open Director"
-          >
-            <i className="fa-solid fa-brain text-[12px]" style={{ color: '#00d4ff' }} />
-          </button>
-
-          <div
-            className="w-2 h-2 rounded-full"
-            style={{ background: phaseColor, boxShadow: `0 0 6px ${phaseColor}` }}
-            title={`Phase: ${currentPhase}`}
-          />
-
-          {isTyping && (
-            <div className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-          )}
-
-          {messages.length > 0 && (
-            <div
-              className="w-5 h-5 rounded-full flex items-center justify-center text-[7px] font-black"
-              style={{ background: phaseColor, color: '#000' }}
+      {
+        !isOpen && (
+          <div className="flex flex-col items-center gap-4 pt-24 pb-8 h-full pointer-events-auto">
+            <button
+              onClick={onToggle}
+              className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:scale-110"
+              style={{ background: 'rgba(0,212,255,0.08)', border: '1px solid rgba(0,212,255,0.2)' }}
+              title="Open Director"
             >
-              {messages.length > 9 ? '9+' : messages.length}
-            </div>
-          )}
+              <i className="fa-solid fa-brain text-[12px]" style={{ color: '#00d4ff' }} />
+            </button>
 
-          <div
-            className="mt-auto mb-4 text-[7px] font-black uppercase tracking-[0.3em] opacity-30"
-            style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: '#a1a1aa' }}
-          >
-            Director
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ background: phaseColor, boxShadow: `0 0 6px ${phaseColor}` }}
+              title={`Phase: ${currentPhase}`}
+            />
+
+            {isTyping && (
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+            )}
+
+            {messages.length > 0 && (
+              <div
+                className="w-5 h-5 rounded-full flex items-center justify-center text-[7px] font-black"
+                style={{ background: phaseColor, color: '#000' }}
+              >
+                {messages.length > 9 ? '9+' : messages.length}
+              </div>
+            )}
+
+            <div
+              className="mt-auto mb-4 text-[7px] font-black uppercase tracking-[0.3em] opacity-30"
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', color: '#a1a1aa' }}
+            >
+              Director
+            </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* ── Expanded Panel ────────────────────────────────── */}
-      {isOpen && (
-        <div className="flex flex-col h-full pt-20 pb-0">
+      {
+        isOpen && (
+          <div className="flex flex-col h-full pt-20 pb-4 pointer-events-none">
 
-          {/* Header */}
-          <div
-            className="flex items-center justify-between px-5 py-3 shrink-0"
-            style={{ borderBottom: '1px solid rgba(0,212,255,0.1)', background: '#0d1526' }}
-          >
-            <div className="flex items-center gap-3">
-              <div className="relative">
+            {/* Header */}
+            <div
+              className="flex items-center justify-between px-5 py-3 shrink-0 mx-4 mt-4 rounded-2xl pointer-events-auto backdrop-blur-md shadow-2xl"
+              style={{ border: '1px solid rgba(0,212,255,0.1)', background: 'rgba(13, 21, 38, 0.85)' }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <div
+                    className={`w-2.5 h-2.5 rounded-full ${isTyping ? 'animate-ping' : ''}`}
+                    style={{ background: '#00d4ff', boxShadow: isTyping ? 'none' : '0 0 8px #00d4ff' }}
+                  />
+                  {isTyping && (
+                    <div className="absolute top-0 left-0 w-2.5 h-2.5 rounded-full bg-cyan-400" />
+                  )}
+                </div>
+                <div>
+                  <h2 className="text-[13px] font-mono font-bold tracking-[0.15em] text-cyan-400 leading-none">
+                    DIRECTOR
+                  </h2>
+                  <span className="text-[7px] font-mono tracking-widest opacity-60" style={{ color: phaseColor }}>
+                    {isTyping ? 'PROCESSING...' : `${PHASE_LABELS[currentPhase].toUpperCase()} PHASE`}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
                 <div
-                  className={`w-2.5 h-2.5 rounded-full ${isTyping ? 'animate-ping' : ''}`}
-                  style={{ background: '#00d4ff', boxShadow: isTyping ? 'none' : '0 0 8px #00d4ff' }}
-                />
-                {isTyping && (
-                  <div className="absolute top-0 left-0 w-2.5 h-2.5 rounded-full bg-cyan-400" />
-                )}
-              </div>
-              <div>
-                <h2 className="text-[13px] font-mono font-bold tracking-[0.15em] text-cyan-400 leading-none">
-                  DIRECTOR
-                </h2>
-                <span className="text-[7px] font-mono tracking-widest opacity-60" style={{ color: phaseColor }}>
-                  {isTyping ? 'PROCESSING...' : `${PHASE_LABELS[currentPhase].toUpperCase()} PHASE`}
-                </span>
+                  className="px-2.5 py-1 rounded text-[7px] font-black uppercase tracking-widest"
+                  style={{
+                    background: `${phaseColor}18`,
+                    border: `1px solid ${phaseColor}40`,
+                    color: phaseColor,
+                  }}
+                >
+                  {currentPhase}
+                </div>
+                <button
+                  onClick={onToggle}
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-mystic-gray hover:text-white transition-colors hover:bg-white/5"
+                >
+                  <i className="fa-solid fa-chevron-right text-[10px]" />
+                </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div
-                className="px-2.5 py-1 rounded text-[7px] font-black uppercase tracking-widest"
-                style={{
-                  background: `${phaseColor}18`,
-                  border: `1px solid ${phaseColor}40`,
-                  color: phaseColor,
-                }}
-              >
-                {currentPhase}
-              </div>
-              <button
-                onClick={onToggle}
-                className="w-7 h-7 rounded-full flex items-center justify-center text-mystic-gray hover:text-white transition-colors hover:bg-white/5"
-              >
-                <i className="fa-solid fa-chevron-right text-[10px]" />
-              </button>
+            {/* Workflow Progress Strip */}
+            <div className="pointer-events-auto">
+              <DirectorProgressStrip
+                phase={currentPhase}
+                steps={workflowSteps}
+                currentStepId={currentStepId}
+              />
             </div>
+
+            {/* Chat thread */}
+            <DirectorChatThread
+              messages={messages}
+              isTyping={isTyping}
+              onChipSelect={sendMessage}
+              onAction={handleAction}
+            />
+
+            {/* Text input */}
+            <DirectorInput
+              onSend={sendMessage}
+              isTyping={isTyping}
+              placeholder="Ask the Director anything..."
+            />
           </div>
-
-          {/* Workflow Progress Strip */}
-          <DirectorProgressStrip
-            phase={currentPhase}
-            steps={workflowSteps}
-            currentStepId={currentStepId}
-          />
-
-          {/* Chat thread */}
-          <DirectorChatThread
-            messages={messages}
-            isTyping={isTyping}
-            onChipSelect={sendMessage}
-            onAction={handleAction}
-          />
-
-          {/* Text input */}
-          <DirectorInput
-            onSend={sendMessage}
-            isTyping={isTyping}
-            placeholder="Ask the Director anything..."
-          />
-        </div>
-      )}
+        )}
     </div>
   );
 };

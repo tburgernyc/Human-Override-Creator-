@@ -21,7 +21,7 @@ export const DirectorChatThread: React.FC<DirectorChatThreadProps> = ({
   }, [messages, isTyping]);
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 scrollbar-thin scrollbar-thumb-[#1a3a5c] scrollbar-track-transparent">
+    <div className="flex-1 overflow-y-auto p-4 scrollbar-thin scrollbar-thumb-[#1a3a5c] scrollbar-track-transparent pointer-events-auto bg-[#0a0e1a]/85 backdrop-blur-md border border-[#1a3a5c] rounded-2xl mx-4 mb-4 mt-2 shadow-2xl">
       {messages.length === 0 && (
         <div className="flex flex-col items-center justify-center h-full opacity-25">
           <i className="fa-solid fa-clapperboard text-4xl mb-4 text-[#00d4ff]"></i>

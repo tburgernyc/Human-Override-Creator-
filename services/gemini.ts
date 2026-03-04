@@ -326,6 +326,7 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
         type: Type.OBJECT,
         properties: {
           character_name: { type: Type.STRING, description: 'Exact name of the character to update' },
+          newName: { type: Type.STRING, description: 'Optional: Provide a replacement name if the character is being renamed to avoid confusion/collision.' },
           voiceId: { type: Type.STRING, description: 'Voice preset ID to assign (from available_voices list)' },
           description: { type: Type.STRING, description: 'Updated character description' },
           visualPrompt: { type: Type.STRING, description: 'Updated visual appearance prompt' },
@@ -347,7 +348,7 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
             items: {
               type: Type.OBJECT,
               properties: {
-                sceneId: { type: Type.NUMBER },
+                sceneId: { type: Type.NUMBER, description: 'The 1-based index of the scene (e.g. 1 for Scene 1)' },
                 updates: { type: Type.OBJECT, properties: { visualPrompt: { type: Type.STRING }, musicMood: { type: Type.STRING }, cameraMotion: { type: Type.STRING } } }
               }
             }
@@ -469,32 +470,32 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
       role: 'user', parts: [
         ...(sceneImages || []).map(img => ({ inlineData: { mimeType: 'image/png' as const, data: img.split(',')[1] } })),
         {
-        // OPT-03: Compressed project context — strips redundant fields to cut ~1,500–2,000 tokens per call
-        text: `CURRENT_PHASE: ${phase.toUpperCase()}
+          // OPT-03: Compressed project context — strips redundant fields to cut ~1,500–2,000 tokens per call
+          text: `CURRENT_PHASE: ${phase.toUpperCase()}
 PHASE_PROGRESS: ${phase === 'genesis' ? (currentProject.script ? 'Script entered, not yet analyzed' : 'No script yet') : phase === 'manifest' ? `${totalScenes} scenes, ${currentProject.characters.length} characters, 0/${totalScenes} assets` : `${completedAssets}/${totalScenes} assets complete`}
 PROJECT_CONTEXT: ${JSON.stringify({
-          scenes: currentProject.scenes.map(s => ({
-            id: s.id,
-            desc: s.description?.substring(0, 60),
-            // OPT-03: Truncate narrator lines — 3 lines max, 40 chars each (was 80 chars, all lines)
-            narratorLines: s.narratorLines?.slice(0, 3).map(l => ({ speaker: l.speaker, text: l.text.substring(0, 40) })),
-          })),
-          // OPT-03: Characters → compact summary (no full description/visualPrompt — Director uses tool calls to get those when needed)
-          characters: currentProject.characters.map(c => ({
-            name: c.name, gender: c.gender,
-            voiceId: c.voiceId || 'UNASSIGNED',
-            hasDNA: !!c.characterDNA,
-          })),
-          // OPT-10: Omit voice list when all voices are already assigned — saves ~300 tokens
-          ...(needsVoiceAssignment ? {
-            available_voices: VOICE_PRESETS
-              .filter((v, i, arr) => arr.findIndex(x => x.apiVoiceName === v.apiVoiceName) === i)
-              .map(v => `${v.id}:${v.gender}`),
-          } : {}),
-          style: currentProject.globalStyle,
-          assets: Object.keys(currentProject.assets).length,
-        })}\n\nUSER_MESSAGE: ${message}`
-      }]
+            scenes: currentProject.scenes.map(s => ({
+              id: s.id,
+              desc: s.description?.substring(0, 60),
+              // OPT-03: Truncate narrator lines — 3 lines max, 40 chars each (was 80 chars, all lines)
+              narratorLines: s.narratorLines?.slice(0, 3).map(l => ({ speaker: l.speaker, text: l.text.substring(0, 40) })),
+            })),
+            // OPT-03: Characters → compact summary (no full description/visualPrompt — Director uses tool calls to get those when needed)
+            characters: currentProject.characters.map(c => ({
+              name: c.name, gender: c.gender,
+              voiceId: c.voiceId || 'UNASSIGNED',
+              hasDNA: !!c.characterDNA,
+            })),
+            // OPT-10: Omit voice list when all voices are already assigned — saves ~300 tokens
+            ...(needsVoiceAssignment ? {
+              available_voices: VOICE_PRESETS
+                .filter((v, i, arr) => arr.findIndex(x => x.apiVoiceName === v.apiVoiceName) === i)
+                .map(v => `${v.id}:${v.gender}`),
+            } : {}),
+            style: currentProject.globalStyle,
+            assets: Object.keys(currentProject.assets).length,
+          })}\n\nUSER_MESSAGE: ${message}`
+        }]
     }
   ] as any;
 
@@ -968,7 +969,7 @@ IMPORTANT: Ensure all arrays and objects are properly closed. Do not truncate th
       const r = JSON5.parse(text);
       console.log("[analyzeScript] Parsed with JSON5");
       return r;
-    } catch {}
+    } catch { }
 
     // 2. Standard JSON with iterative position-guided repairs (up to 50 passes)
     let json = text;
@@ -1119,11 +1120,11 @@ export const generateCharacterImage = async (character: Character, resolution: R
 // Shot-type-specific photographic direction injected into every image prompt
 const SHOT_TYPE_PHOTO_DIRECTION: Record<string, string> = {
   ELS: 'Extreme wide anamorphic frame. Subject dwarfed by environment. Deep focus f/8. Horizon at upper third. Majestic scale.',
-  LS:  'Wide establishing frame. Full body visible. Natural depth of field. 35mm f/5.6. Environment dominant.',
+  LS: 'Wide establishing frame. Full body visible. Natural depth of field. 35mm f/5.6. Environment dominant.',
   MLS: 'Medium-long frame. Subject from knees up. 50mm f/4. Body language clearly readable. Balanced foreground/background.',
-  MS:  'Mid-shot. Subject waist-up. 85mm f/2.8. Gentle background bokeh. Conversational framing.',
+  MS: 'Mid-shot. Subject waist-up. 85mm f/2.8. Gentle background bokeh. Conversational framing.',
   MCU: 'Medium close-up. Chest-to-top-of-head. 85mm f/1.8. Shallow focus. Subtle skin texture. Eyes sharp.',
-  CU:  'Close-up. Face fills 60% of frame. 50mm f/1.4. Shallow depth of field. Micro-expression visible. Eyes razor sharp.',
+  CU: 'Close-up. Face fills 60% of frame. 50mm f/1.4. Shallow depth of field. Micro-expression visible. Eyes razor sharp.',
   ECU: 'Extreme close-up. Single facial feature or detail. Macro-like. Abstract background. Intense emotional detail.',
   OTS: 'Over-the-shoulder. Foreground subject soft. Background subject sharp. 50mm f/2.8. Conversational tension. Slight Dutch angle.',
   POV: 'First-person perspective. Slight handheld fisheye distortion. Ground plane visible at bottom. Immersive.',
@@ -1223,13 +1224,13 @@ export const generateSceneImage = async (
 
 // Motion-specific cinematic descriptions injected into every Veo prompt
 const MOTION_LIBRARY: Record<string, string> = {
-  zoom_in:          'Slow push-in dolly. Camera glides steadily forward toward subject. Focal compression builds tension.',
-  zoom_out:         'Reveal pull-back. Camera retreats smoothly, widening the frame to expose environment.',
-  pan_left:         'Smooth lateral pan left at 8°/second. Horizon stays level. No tilt or shake.',
-  pan_right:        'Smooth lateral pan right at 8°/second. Horizon stays level. No tilt or shake.',
-  dolly_in:         'Rack-focus dolly push. Background defocuses as subject sharpens. Shallow depth of field.',
-  dolly_out:        'Pedestal pull-back with gentle depth expansion. Subject recedes into environment.',
-  static:           'Locked-off shot. Absolute camera stillness. Zero drift. Tripod-mounted precision.',
+  zoom_in: 'Slow push-in dolly. Camera glides steadily forward toward subject. Focal compression builds tension.',
+  zoom_out: 'Reveal pull-back. Camera retreats smoothly, widening the frame to expose environment.',
+  pan_left: 'Smooth lateral pan left at 8°/second. Horizon stays level. No tilt or shake.',
+  pan_right: 'Smooth lateral pan right at 8°/second. Horizon stays level. No tilt or shake.',
+  dolly_in: 'Rack-focus dolly push. Background defocuses as subject sharpens. Shallow depth of field.',
+  dolly_out: 'Pedestal pull-back with gentle depth expansion. Subject recedes into environment.',
+  static: 'Locked-off shot. Absolute camera stillness. Zero drift. Tripod-mounted precision.',
   random_cinematic: 'Subtle organic handheld drift. Micro-movement with gentle breathing rhythm. ARRI handheld style.',
 };
 
@@ -1367,22 +1368,22 @@ export interface AudioGenerationResult {
 
 // Emotional delivery directives for TTS — prepended to text to guide vocal performance
 const EMOTION_TTS_DIRECTIVE: Record<string, string> = {
-  excited:    'Read with excited, high-energy delivery: ',
-  whispered:  'Read in a hushed, intimate whisper: ',
-  serious:    'Read with grave, serious authority: ',
-  shouting:   'Read with forceful, intense projection: ',
+  excited: 'Read with excited, high-energy delivery: ',
+  whispered: 'Read in a hushed, intimate whisper: ',
+  serious: 'Read with grave, serious authority: ',
+  shouting: 'Read with forceful, intense projection: ',
   empathetic: 'Read with warm, compassionate empathy: ',
-  sarcastic:  'Read with dry, understated sarcasm: ',
-  neutral:    '',
+  sarcastic: 'Read with dry, understated sarcasm: ',
+  neutral: '',
 };
 
 const SCENE_EMOTION_PREFIX: Record<string, string> = {
-  tense:       'Emotional register: tense and urgent. ',
-  hopeful:     'Emotional register: hopeful and warm. ',
+  tense: 'Emotional register: tense and urgent. ',
+  hopeful: 'Emotional register: hopeful and warm. ',
   melancholic: 'Emotional register: melancholic and reflective. ',
-  triumphant:  'Emotional register: triumphant and powerful. ',
-  mysterious:  'Emotional register: mysterious and cryptic. ',
-  neutral:     '',
+  triumphant: 'Emotional register: triumphant and powerful. ',
+  mysterious: 'Emotional register: mysterious and cryptic. ',
+  neutral: '',
 };
 
 export const generateSceneAudio = async (lines: DialogueLine[], characters: Character[], scene?: Scene): Promise<AudioGenerationResult> => {
@@ -1772,21 +1773,21 @@ export const synthesizeCharacterDNA = async (
   const schema = {
     type: Type.OBJECT,
     properties: {
-      facialGeometry:   { type: Type.STRING },
-      eyeSignature:     { type: Type.STRING },
-      hairSignature:    { type: Type.STRING },
-      skinDescriptor:   { type: Type.STRING },
+      facialGeometry: { type: Type.STRING },
+      eyeSignature: { type: Type.STRING },
+      hairSignature: { type: Type.STRING },
+      skinDescriptor: { type: Type.STRING },
       distinctiveMarks: { type: Type.STRING },
-      clothingCanon:    { type: Type.STRING },
-      heightBuild:      { type: Type.STRING },
-      colorSignature:   { type: Type.ARRAY, items: { type: Type.STRING } },
-      speechPattern:    { type: Type.STRING },
-      emotionalRange:   { type: Type.ARRAY, items: { type: Type.STRING } },
-      physicality:      { type: Type.STRING },
+      clothingCanon: { type: Type.STRING },
+      heightBuild: { type: Type.STRING },
+      colorSignature: { type: Type.ARRAY, items: { type: Type.STRING } },
+      speechPattern: { type: Type.STRING },
+      emotionalRange: { type: Type.ARRAY, items: { type: Type.STRING } },
+      physicality: { type: Type.STRING },
     },
-    required: ['facialGeometry','eyeSignature','hairSignature','skinDescriptor',
-               'distinctiveMarks','clothingCanon','heightBuild','colorSignature',
-               'speechPattern','emotionalRange','physicality'],
+    required: ['facialGeometry', 'eyeSignature', 'hairSignature', 'skinDescriptor',
+      'distinctiveMarks', 'clothingCanon', 'heightBuild', 'colorSignature',
+      'speechPattern', 'emotionalRange', 'physicality'],
   };
 
   const prompt = `You are a character identity specialist for a ${style} cinematic production.
@@ -2089,10 +2090,10 @@ export const generateLightingBrief = async (script: string, globalStyle: string,
     type: Type.OBJECT,
     properties: {
       keyLightDirection: { type: Type.STRING },
-      colorTemperature:  { type: Type.STRING },
-      shadowIntensity:   { type: Type.STRING },
-      timeOfDay:         { type: Type.STRING },
-      moodDescriptor:    { type: Type.STRING },
+      colorTemperature: { type: Type.STRING },
+      shadowIntensity: { type: Type.STRING },
+      timeOfDay: { type: Type.STRING },
+      moodDescriptor: { type: Type.STRING },
     },
     required: ['keyLightDirection', 'colorTemperature', 'shadowIntensity', 'timeOfDay', 'moodDescriptor'],
   };

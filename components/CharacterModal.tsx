@@ -352,7 +352,7 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClo
                             Save Profile
                         </button>
                         <button onClick={onClose} className="px-6 py-3 text-mystic-gray hover:text-white border border-white/10 rounded-xl transition-colors text-[9px] font-bold uppercase tracking-[0.2em]">
-                            Dismiss
+                            <i className="fa-solid fa-arrow-left mr-2"></i> Back
                         </button>
                     </div>
                 </div>

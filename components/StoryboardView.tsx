@@ -25,14 +25,14 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({ scenes, assets, 
           </div>
           <div className="flex items-center gap-6">
             <div className="flex gap-4 px-6 py-2 nm-inset-input rounded-full">
-               <div className="flex items-center gap-2">
-                 <div className="w-2 h-2 rounded-full bg-deep-sage"></div>
-                 <span className="text-[8px] font-black text-mystic-gray uppercase">Manifested</span>
-               </div>
-               <div className="flex items-center gap-2">
-                 <div className="w-2 h-2 rounded-full bg-white/10"></div>
-                 <span className="text-[8px] font-black text-mystic-gray uppercase">Pending</span>
-               </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-deep-sage"></div>
+                <span className="text-[8px] font-black text-mystic-gray uppercase">Manifested</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-white/10"></div>
+                <span className="text-[8px] font-black text-mystic-gray uppercase">Pending</span>
+              </div>
             </div>
             <button onClick={onClose} className="w-10 h-10 rounded-full nm-button flex items-center justify-center text-mystic-gray hover:text-white transition-all">
               <i className="fa-solid fa-xmark"></i>
@@ -45,9 +45,9 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({ scenes, assets, 
             {scenes.map((scene, idx) => {
               const asset = assets[scene.id];
               const isManifested = asset?.status === 'complete';
-              
+
               return (
-                <div 
+                <div
                   key={scene.id}
                   onClick={() => { onSelectScene(scene.id); onClose(); }}
                   className="group relative cursor-pointer"
@@ -57,8 +57,8 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({ scenes, assets, 
                       <img src={asset.imageUrl} className="w-full h-full object-cover" alt={`Scene ${idx + 1}`} />
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center bg-black/40">
-                         <span className="text-[10px] text-mystic-gray uppercase font-black tracking-widest opacity-20">Scene {idx + 1}</span>
-                         <i className="fa-solid fa-clapperboard text-white/5 mt-2 text-2xl"></i>
+                        <span className="text-[10px] text-mystic-gray uppercase font-black tracking-widest opacity-20">Scene {idx + 1}</span>
+                        <i className="fa-solid fa-clapperboard text-white/5 mt-2 text-2xl"></i>
                       </div>
                     )}
                     <div className="absolute top-4 left-4 z-10">
@@ -76,7 +76,9 @@ export const StoryboardView: React.FC<StoryboardViewProps> = ({ scenes, assets, 
         </div>
 
         <footer className="p-8 border-t border-white/5 bg-white/5 flex justify-center">
-           <button onClick={onClose} className="px-12 py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-luna-gold hover:text-white transition-all">Dismiss Storyboard</button>
+          <button onClick={onClose} className="px-12 py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest shadow-2xl hover:bg-luna-gold hover:text-white transition-all">
+            <i className="fa-solid fa-arrow-left mr-2"></i> Back
+          </button>
         </footer>
       </div>
     </div>
