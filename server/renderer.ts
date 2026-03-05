@@ -55,6 +55,8 @@ export async function renderMP4(frames: string[], options: RenderOptions): Promi
           '-c:a aac',           // AAC audio — broadcast standard
           '-ar 48000',          // 48kHz sample rate
           '-b:a 192k',          // 192kbps audio bitrate
+          // Netflix-spec loudness normalization: -27 LKFS integrated, -2 dB True Peak, LRA 7
+          '-af', 'loudnorm=I=-27:TP=-2:LRA=7',
           // Task 11: Master Clock A/V sync conformance
           ...(options.masterClockDuration ? [`-t ${options.masterClockDuration.toFixed(3)}`] : []),
         ]
@@ -63,6 +65,8 @@ export async function renderMP4(frames: string[], options: RenderOptions): Promi
           '-pix_fmt yuv420p',
           '-b:v 40M',           // 40Mbps for WebM output
           `-vf scale=${scale}:-2`,
+          // Netflix-spec loudness normalization
+          '-af', 'loudnorm=I=-27:TP=-2:LRA=7',
           // Task 11: Master Clock A/V sync conformance
           ...(options.masterClockDuration ? [`-t ${options.masterClockDuration.toFixed(3)}`] : []),
         ];
