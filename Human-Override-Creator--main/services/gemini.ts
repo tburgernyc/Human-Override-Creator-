@@ -13,8 +13,13 @@ const cleanJsonResponse = (text: string): string => {
   return clean;
 };
 
-// Routes all SDK calls through the local Express proxy, keeping the API key server-side.
-const PROXY_BASE_URL = (import.meta as any).env?.VITE_PROXY_URL ?? 'http://localhost:3001/api/gemini';
+// Routes all SDK calls through the secure API proxy, keeping the API key server-side.
+// In production (Vercel), uses the current page's origin so no env var is needed.
+// Locally, falls back to VITE_PROXY_URL or the Express dev proxy on port 3001.
+const PROXY_BASE_URL: string = (import.meta as any).env?.VITE_PROXY_URL ??
+  (typeof window !== 'undefined'
+    ? `${window.location.origin}/api/gemini`
+    : 'http://localhost:3001/api/gemini');
 
 const getAIClient = (): GoogleGenAI => {
   // apiVersion: '' prevents the SDK from prepending 'v1beta/' to paths.
