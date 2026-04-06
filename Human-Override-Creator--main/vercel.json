@@ -1,0 +1,13 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "functions": {
+    "api/gemini/[...path].ts": {
+      "maxDuration": 60
+    },
+    "api/download.ts": {
+      "maxDuration": 60
+    }
+  }
+}
