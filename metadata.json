@@ -1,0 +1,7 @@
+{
+  "name": "Human Override Creation Tool",
+  "description": "An advanced AI pipeline that transforms text scripts into full animated videos with consistent characters, scenes, and multi-speaker audio using Gemini 3 Pro, Veo, and Flash TTS.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
