@@ -6,6 +6,7 @@ import { generateVideoScript } from '../services/gemini';
 interface ScriptInputProps {
   onAnalyze: (script: string) => void;
   isAnalyzing: boolean;
+  stepMessage?: string;
 }
 
 const TEMPLATES = [
@@ -15,7 +16,7 @@ const TEMPLATES = [
     { name: 'Explainer', prompt: 'A clear, concise, and friendly tutorial or explanation script for ' },
 ];
 
-export const ScriptInput: React.FC<ScriptInputProps> = ({ onAnalyze, isAnalyzing }) => {
+export const ScriptInput: React.FC<ScriptInputProps> = ({ onAnalyze, isAnalyzing, stepMessage }) => {
   const [mode, setMode] = useState<'manual' | 'ai'>('manual');
   const [script, setScript] = useState(INITIAL_SCRIPT_PLACEHOLDER);
   const [prompt, setPrompt] = useState("");
@@ -31,11 +32,14 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ onAnalyze, isAnalyzing
         "> MAPPING AUDIENCE ARCHETYPES",
         "> SYNCHRONIZING MULTI-SPEAKER MESH",
         "> CALCULATING CINEMATIC KINETICS",
-        "> CORE MANIFEST READY"
+        "> CORE MANIFEST READY",
+        "> SYNTHESIZING CAST PROFILES",
+        "> LOCKING IDENTITY REFERENCES",
+        "> CALIBRATING VISUAL PERSISTENCE"
       ];
       let i = 0;
       const interval = setInterval(() => {
-        setParsingLog(prev => [...prev, logs[i]].slice(-5));
+        setParsingLog(prev => [...prev, logs[i % logs.length]].slice(-5));
         i++;
         if (i >= logs.length) clearInterval(interval);
       }, 800);
@@ -76,6 +80,11 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ onAnalyze, isAnalyzing
                   {log}
                 </p>
               ))}
+              {stepMessage && (
+                <p className="text-[10px] tracking-widest text-starlight pt-2 border-t border-white/5 mt-3">
+                  &gt; {stepMessage.toUpperCase()}
+                </p>
+              )}
               <div className="h-1.5 w-full nm-inset-input rounded-full overflow-hidden mt-6">
                 <div className="h-full bg-luna-gold animate-[progress_5s_ease-in-out]"></div>
               </div>

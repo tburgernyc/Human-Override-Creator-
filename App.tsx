@@ -6,6 +6,7 @@ import { SceneCard } from './components/SceneCard';
 import { Player } from './components/Player';
 import { Renderer } from './components/Renderer';
 import { CharacterModal } from './components/CharacterModal';
+import { AddCharacterModal } from './components/AddCharacterModal';
 import { LandingPage } from './components/LandingPage';
 import { ProjectsView } from './components/ProjectsView';
 import { SceneInspector } from './components/SceneInspector';
@@ -30,6 +31,7 @@ import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scen
 import {
   analyzeScript,
   generateCharacterImage,
+  generateCharacterRefsConcurrent,
   generateSceneImage,
   generateSceneVideo,
   generateSceneAudio,
@@ -106,6 +108,7 @@ const App: React.FC = () => {
   const [showScriptDoctor, setShowScriptDoctor] = useState(false);
   const [inspectingScene, setInspectingScene] = useState<Scene | null>(null);
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
+  const [showAddCharacter, setShowAddCharacter] = useState(false);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [bRollSuggestions, setBRollSuggestions] = useState<Scene[]>([]);
   const [currentTaskLabel, setCurrentTaskLabel] = useState("");
@@ -230,17 +233,53 @@ const App: React.FC = () => {
 
   const handleAnalyze = async (script: string) => {
     if (!hasAuth) { await triggerApiKeySelection(); setHasAuth(true); return; }
-    setProject(prev => ({ ...prev, status: 'analyzing', script }));
+    setProject(prev => ({ ...prev, status: 'analyzing', script, currentStepMessage: 'Parsing script...' }));
     setAutoDiagnosisTriggered(false);
     addLog("Initializing production sequence analysis...", "system");
     try {
       const { characters, scenes, tasks, modules, metadata } = await analyzeScript(script, project.productionSeed);
       const initialAssets: GeneratedAssets = {};
       scenes.forEach(s => initialAssets[s.id] = { status: 'pending', variants: [] });
-      setProject(prev => ({ ...prev, status: 'ready', characters, scenes, assets: initialAssets, tasks, modules }));
+
+      // Stage 1: seat the cast and scenes so the UI shows progress immediately
+      const synthMsg = `Synthesizing ${characters.length} character${characters.length === 1 ? '' : 's'}...`;
+      setProject(prev => ({ ...prev, status: 'character_gen', characters, scenes, assets: initialAssets, tasks, modules, currentStepMessage: synthMsg }));
       setYoutubeMetadata(metadata);
-      addLog(`Analysis complete. Visual health: Calibrated.`, "success");
-    } catch (error) { addLog("Analysis failure.", "error"); }
+      addLog(`Script parsed: ${characters.length} cast, ${scenes.length} scenes. Generating character references...`, "system");
+
+      // Stage 2: generate character reference images in parallel. Each completion
+      // streams back into project state so the user sees portraits appear live.
+      const style = project.globalStyle || "Cinematic";
+      const charsWithRefs = await generateCharacterRefsConcurrent(
+        characters,
+        style,
+        project.productionSeed,
+        (charId, img, err) => {
+          if (img) {
+            setProject(prev => ({
+              ...prev,
+              characters: prev.characters.map(c => c.id === charId ? { ...c, referenceImageBase64: img } : c)
+            }));
+          } else if (err) {
+            const name = characters.find(c => c.id === charId)?.name || charId;
+            addLog(`Character ref generation failed for "${name}" — will auto-retry at scene time.`, 'error');
+          }
+        }
+      );
+
+      const missingCount = charsWithRefs.filter(c => !c.referenceImageBase64).length;
+      setProject(prev => ({ ...prev, status: 'ready', characters: charsWithRefs, currentStepMessage: '' }));
+
+      if (missingCount > 0) {
+        addLog(`Cast synthesis: ${characters.length - missingCount}/${characters.length} references locked. Missing refs will retry on first scene use.`, 'success');
+      } else {
+        addLog(`Analysis complete. Full cast locked. Visual health: Calibrated.`, "success");
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      addLog(`Analysis failure: ${msg}`, "error");
+      setProject(prev => ({ ...prev, status: 'idle', currentStepMessage: '' }));
+    }
   };
 
   const handleGenerateSceneAsset = async (sceneId: string, feedback?: string) => {
@@ -259,12 +298,39 @@ const App: React.FC = () => {
     }));
 
     try {
+      // Auto-fill any missing character reference images for characters in this scene.
+      // Without this, generateSceneImage silently drops characters without refs and the
+      // scene loses identity persistence — the central failure mode this audit fixes.
+      const sceneCharsMissingRefs = project.characters.filter(c =>
+        scene.charactersInScene.includes(c.name) && !c.referenceImageBase64
+      );
+      let workingCharacters = project.characters;
+      if (sceneCharsMissingRefs.length > 0) {
+        addLog(`Generating missing reference image${sceneCharsMissingRefs.length === 1 ? '' : 's'} for Scene #${project.scenes.indexOf(scene) + 1}: ${sceneCharsMissingRefs.map(c => c.name).join(', ')}`, 'system');
+        const style = project.globalStyle || "Cinematic";
+        const refResults = await Promise.allSettled(sceneCharsMissingRefs.map((c, i) =>
+          generateCharacterImage(c, resolution, style, project.productionSeed + (project.characters.indexOf(c) + 1) * 7919)
+            .then(img => ({ id: c.id, img }))
+        ));
+        const refsById = new Map<string, string>();
+        refResults.forEach((r, i) => {
+          if (r.status === 'fulfilled') refsById.set(r.value.id, r.value.img);
+          else addLog(`Reference generation failed for "${sceneCharsMissingRefs[i].name}" — scene will proceed without identity lock.`, 'error');
+        });
+        if (refsById.size > 0) {
+          workingCharacters = project.characters.map(c =>
+            refsById.has(c.id) ? { ...c, referenceImageBase64: refsById.get(c.id)! } : c
+          );
+          setProject(prev => ({ ...prev, characters: workingCharacters }));
+        }
+      }
+
       const moodboardImg = project.modules.outline;
       const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
       const styleRef = moodboardImg || keyArtImg;
 
       // Phase 1: Image — fatal if fails
-      const img = await generateSceneImage(scene, project.characters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
+      const img = await generateSceneImage(scene, workingCharacters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: 'generating_video' } } }));
 
       // Phase 2: Video — fatal if fails
@@ -339,6 +405,34 @@ const App: React.FC = () => {
     setProject(p => ({ ...p, characters: p.characters.map(c => c.id === char.id ? char : c) }));
     setEditingCharacter(null);
     addLog(`Character profile "${char.name}" updated.`, "system");
+  };
+
+  const handleAddCharacter = async (name: string, gender: 'Male' | 'Female', description: string) => {
+    const style = project.globalStyle || "Cinematic";
+    const persona = await synthesizeCharacterPersona(name, gender, style, project.productionSeed);
+    const newChar: Character = {
+      id: `char_${crypto.randomUUID()}`,
+      name,
+      description: persona.description || description,
+      gender,
+      visualPrompt: persona.visualPrompt || description || `${gender} character named ${name}`,
+      voiceId: persona.voiceId || (VOICE_PRESETS.find(v => v.gender === gender)?.id ?? VOICE_PRESETS[0].id),
+      voiceSettings: { speed: 1, pitch: 0 }
+    };
+    // Seat the character immediately so the user sees it appear, then stream in the ref image.
+    setProject(p => ({ ...p, characters: [...p.characters, newChar] }));
+    addLog(`Cast member "${name}" registered. Generating reference image...`, "system");
+    try {
+      const img = await generateCharacterImage(newChar, resolution, style, project.productionSeed + project.characters.length * 7919);
+      setProject(p => ({
+        ...p,
+        characters: p.characters.map(c => c.id === newChar.id ? { ...c, referenceImageBase64: img } : c)
+      }));
+      addLog(`Reference image locked for "${name}".`, "success");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'reference generation failed';
+      addLog(`Reference image generation failed for "${name}": ${msg} — will retry at scene time.`, "error");
+    }
   };
 
   const handleManifestAll = async () => {
@@ -500,7 +594,7 @@ const App: React.FC = () => {
             {/* STAGE 1: GENESIS (Script & Reference) */}
             <div className={`grid grid-cols-1 xl:grid-cols-12 gap-10 transition-all duration-700 ${activePhase !== 'genesis' ? 'opacity-50 hover:opacity-100 blur-[1px] hover:blur-0' : ''}`}>
               <div className="xl:col-span-8">
-                <ScriptInput onAnalyze={handleAnalyze} isAnalyzing={project.status === 'analyzing'} />
+                <ScriptInput onAnalyze={handleAnalyze} isAnalyzing={project.status === 'analyzing' || project.status === 'character_gen'} stepMessage={project.currentStepMessage} />
               </div>
               <div className="xl:col-span-4 flex flex-col gap-6">
                 <Moodboard
@@ -532,7 +626,7 @@ const App: React.FC = () => {
               <div className="space-y-10 animate-in slide-in-from-bottom-10 duration-1000">
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
                   <div className="lg:col-span-4 flex flex-col gap-6">
-                    <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={() => { }} onAudit={() => setShowAuditor(true)} />
+                    <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={() => setShowAddCharacter(true)} onAudit={() => setShowAuditor(true)} />
                     <div className="nm-panel p-8 border border-white/5 bg-black/40">
                       <h4 className="text-[10px] font-black text-white uppercase tracking-widest mb-6 flex items-center gap-3">
                         <i className="fa-solid fa-stethoscope text-luna-gold"></i> Directorial Audit
@@ -717,6 +811,7 @@ const App: React.FC = () => {
 
       {/* MODALS */}
       {editingCharacter && <CharacterModal character={editingCharacter} onClose={() => setEditingCharacter(null)} onSave={handleCharacterSave} onRegenerateImage={async (id) => { const char = project.characters.find(c => c.id === id)!; const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed); handleCharacterSave({ ...char, referenceImageBase64: img }); }} />}
+      {showAddCharacter && <AddCharacterModal onClose={() => setShowAddCharacter(false)} onCreate={handleAddCharacter} />}
       {inspectingScene && <SceneInspector scene={inspectingScene} characters={project.characters} assetImage={project.assets[inspectingScene.id]?.imageUrl} onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))} onClose={() => setInspectingScene(null)} />}
       {showAssetLibrary && <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={() => setShowAssetLibrary(false)} onSelect={scrollToScene} />}
       {showMixer && <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={() => setShowMixer(false)} />}

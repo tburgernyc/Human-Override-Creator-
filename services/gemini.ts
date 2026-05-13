@@ -348,8 +348,9 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
             description: { type: Type.STRING },
             gender: { type: Type.STRING, enum: ['Male', 'Female'] },
             visualPrompt: { type: Type.STRING },
+            voiceId: { type: Type.STRING, enum: VOICE_PRESETS.map(v => v.id) },
           },
-          required: ["name", "description", "gender", "visualPrompt"]
+          required: ["name", "description", "gender", "visualPrompt", "voiceId"]
         }
       },
       scenes: {
@@ -384,15 +385,26 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
     required: ["characters", "scenes", "tasks", "modules", "metadata"]
   };
 
+  const voiceCatalog = VOICE_PRESETS.map(v => `${v.id} (${v.gender}, ${v.label})`).join('; ');
+  const prompt = `Analyze script and extract production manifest. For each character, pick the most fitting voiceId from this catalog (must match exactly): ${voiceCatalog}.
+
+Script:
+${script}`;
+
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
     model: MODEL_NAMES.THINKING,
-    contents: `Analyze script and extract production manifest: ${script}`,
+    contents: prompt,
     config: { responseMimeType: "application/json", responseSchema: analysisSchema, thinkingConfig: { thinkingBudget: 12000 }, seed }
   }));
 
   const data = parseJsonResponse<any>(response.text);
   return {
-    characters: data.characters.map((c: any) => ({ ...c, id: `char_${crypto.randomUUID()}`, voiceId: VOICE_PRESETS[0].id, voiceSettings: { pitch: 0, speed: 1 } })),
+    characters: data.characters.map((c: any) => {
+      // Validate the model's voice pick; fall back to a gender-matched default if invalid.
+      const picked = VOICE_PRESETS.find(v => v.id === c.voiceId);
+      const fallback = VOICE_PRESETS.find(v => v.gender === c.gender) || VOICE_PRESETS[0];
+      return { ...c, id: `char_${crypto.randomUUID()}`, voiceId: (picked ?? fallback).id, voiceSettings: { pitch: 0, speed: 1 } };
+    }),
     scenes: data.scenes.map((s: any) => ({ ...s, id: crypto.randomUUID(), cameraMotion: 'random_cinematic', transition: 'fade' })),
     tasks: (data.tasks || []).map((t: any, i: number) => ({ ...t, id: `task_${i}`, status: 'pending' })),
     modules: data.modules,
@@ -402,14 +414,48 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
 
 export const generateCharacterImage = async (character: Character, resolution: Resolution, style: string, seed?: number): Promise<string> => {
   const ai = getAIClient();
-  const response = await ai.models.generateContent({
+  const response = await retryWithBackoff(() => ai.models.generateContent({
     model: MODEL_NAMES.IMAGE,
-    contents: `${style} character portrait of ${character.name}. ${character.visualPrompt}. Professional studio lighting. High fidelity.`,
+    contents: `${style} character portrait of ${character.name}. ${character.visualPrompt}. Neutral pose, centered, front-facing, professional studio lighting, plain neutral background. Clear, photorealistic facial features for identity reference.`,
     config: { imageConfig: { aspectRatio: "1:1" }, seed }
-  });
+  }));
   const data = response.candidates?.[0]?.content?.parts.find(p => p.inlineData)?.inlineData?.data;
   if (!data) throw new Error('Character image generation returned no data. The prompt may have been safety-filtered.');
   return `data:image/png;base64,${data}`;
+};
+
+// Generates reference images for a batch of characters with bounded concurrency.
+// Reports per-character completion via onComplete so the UI can update progressively.
+// Characters with an existing referenceImageBase64 are skipped.
+export const generateCharacterRefsConcurrent = async (
+  characters: Character[],
+  style: string,
+  productionSeed: number,
+  onComplete: (charId: string, img?: string, err?: Error) => void,
+  concurrency: number = 3
+): Promise<Character[]> => {
+  const result: Character[] = characters.map(c => ({ ...c }));
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < characters.length) {
+      const myIdx = cursor++;
+      const char = characters[myIdx];
+      if (char.referenceImageBase64) continue;
+      try {
+        const charSeed = productionSeed + myIdx * 7919; // distinct seed per character
+        const img = await generateCharacterImage(char, Resolution.HD, style, charSeed);
+        result[myIdx] = { ...char, referenceImageBase64: img };
+        onComplete(char.id, img);
+      } catch (e) {
+        onComplete(char.id, undefined, e instanceof Error ? e : new Error('character ref generation failed'));
+      }
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(concurrency, characters.length) }, () => worker());
+  await Promise.all(workers);
+  return result;
 };
 
 export const generateSceneImage = async (scene: Scene, characters: Character[], aspectRatio: AspectRatio, resolution: Resolution, feedback?: string, style: string = "Cinematic", seed?: number, styleReferenceBase64?: string): Promise<string> => {
@@ -555,6 +601,49 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
     throw new Error(`All ${filteredLines.length} TTS line(s) failed.`);
   }
   return parts.length ? `data:audio/pcm;base64,${uint8ArrayToBase64(concatUint8Arrays(parts))}` : "";
+};
+
+// Uses Gemini Flash as a vision judge to estimate how well a character's
+// identity is preserved in a scene image versus their canonical reference.
+// Returns 0-100 + a short note. On failure returns a 0 score so the UI can
+// flag it rather than pretending success.
+export const analyzeCharacterContinuity = async (
+  characterRefBase64: string,
+  sceneImageBase64: string,
+  characterName: string
+): Promise<{ score: number; notes: string }> => {
+  const ai = getAIClient();
+  const schema = {
+    type: Type.OBJECT,
+    properties: {
+      score: { type: Type.NUMBER },
+      notes: { type: Type.STRING }
+    },
+    required: ["score", "notes"]
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAMES.CHECK,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: 'image/png', data: stripDataUriPrefix(characterRefBase64) } },
+          { inlineData: { mimeType: 'image/png', data: stripDataUriPrefix(sceneImageBase64) } },
+          { text: `Image 1 is the canonical reference for character "${characterName}". Image 2 is a scene from the same production where this character should appear. Rate how well the character's identity (face shape, hair, age, distinctive features) is preserved on a 0-100 scale. 100 = clearly the same person, 75 = same person with minor drift, 50 = similar archetype but different person, 25 = unrelated, 0 = character is absent from the scene. Provide a short note (max 20 words) calling out the main drift if any. Output JSON.` }
+        ]
+      },
+      config: { responseMimeType: "application/json", responseSchema: schema }
+    });
+
+    const parsed = parseJsonResponse<{ score: number; notes: string }>(response.text, { score: 0, notes: 'scoring returned no data' });
+    // Clamp defensively — model may emit out-of-range values
+    return {
+      score: Math.max(0, Math.min(100, Math.round(parsed.score ?? 0))),
+      notes: (parsed.notes || '').slice(0, 200)
+    };
+  } catch (e) {
+    return { score: 0, notes: e instanceof Error ? e.message : 'scoring failed' };
+  }
 };
 
 export const triggerApiKeySelection = async () => { if (typeof window !== 'undefined' && window.aistudio) await window.aistudio.openSelectKey(); };
