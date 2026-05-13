@@ -72,7 +72,7 @@ export interface DirectorDraft {
   timestamp: number;
   reasoning: string;
   proposedChanges: {
-    sceneId: number;
+    sceneId: string;
     updates: Partial<Scene>;
   }[];
   status: 'pending' | 'applied' | 'discarded';
@@ -103,7 +103,7 @@ export interface AssetHistoryItem {
 }
 
 export interface GeneratedAssets {
-  [sceneId: number]: {
+  [sceneId: string]: {
     imageUrl?: string;
     videoUrl?: string;
     audioUrl?: string;
@@ -145,7 +145,7 @@ export interface ProjectState {
   globalStyle?: string;
   viralData?: ViralPotential;
   productionSeed: number;
-  keyArtSceneId?: number;
+  keyArtSceneId?: string;
   activeDraft?: DirectorDraft | null;
   cinematicProfile?: 'natural' | 'dreamy' | 'high_contrast' | 'vintage' | 'noir';
   mastering?: {

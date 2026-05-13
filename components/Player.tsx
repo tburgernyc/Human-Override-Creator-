@@ -129,7 +129,8 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
 
         if (asset?.audioUrl) {
             try {
-                audioBuffer = await decodeAudio(asset.audioUrl.split(',')[1], audioCtxRef.current);
+                const audioB64 = asset.audioUrl.includes(',') ? asset.audioUrl.split(',')[1] : asset.audioUrl;
+                audioBuffer = await decodeAudio(audioB64, audioCtxRef.current);
                 durationMs = Math.max(durationMs, audioBuffer.duration * 1000);
             } catch (e) {
                 console.error("Audio decoding failed", e);
@@ -203,7 +204,7 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
                     </div>
                 )}
 
-                <div className="absolute inset-0 pointer-events-none opacity-[0.02] z-[25] bg-[url('https://www.transparenttextures.com/patterns/stardust.png')]"></div>
+                <div className="absolute inset-0 pointer-events-none opacity-[0.02] z-[25] bg-[url('/textures/stardust.png')]"></div>
 
                 <div className="absolute bottom-0 left-0 h-1.5 bg-luna-gold transition-all ease-linear z-30" style={{ width: `${progress}%` }}></div>
 

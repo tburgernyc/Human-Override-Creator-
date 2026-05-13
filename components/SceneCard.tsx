@@ -6,19 +6,19 @@ import { MUSIC_TRACKS } from '../constants';
 
 interface SceneCardProps {
   scene: Scene;
-  asset?: GeneratedAssets[number];
+  asset?: GeneratedAssets[string];
   characters?: Character[];
   index: number;
   totalScenes: number;
-  onGenerate: (sceneId: number, feedback?: string) => void;
-  onExtend: (sceneId: number) => void;
-  onUpdate: (sceneId: number, updatedScene: Scene) => void;
+  onGenerate: (sceneId: string, feedback?: string) => void;
+  onExtend: (sceneId: string) => void;
+  onUpdate: (sceneId: string, updatedScene: Scene) => void;
   onMove: (direction: 'prev' | 'next') => void;
-  onDelete: (sceneId: number) => void;
+  onDelete: (sceneId: string) => void;
   onDuplicate: () => void;
   onInspect?: (scene: Scene) => void;
-  onClearAsset: (sceneId: number, type: 'visual' | 'audio' | 'all') => void;
-  onSelectVariant?: (sceneId: number, variant: AssetHistoryItem) => void;
+  onClearAsset: (sceneId: string, type: 'visual' | 'audio' | 'all') => void;
+  onSelectVariant?: (sceneId: string, variant: AssetHistoryItem) => void;
   isProcessing: boolean;
   globalStyle?: string;
 }
@@ -43,7 +43,20 @@ export const SceneCard: React.FC<SceneCardProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showTakes, setShowTakes] = useState(false);
+  const [showTakeMenu, setShowTakeMenu] = useState(false);
   const [isOptimizingPrompt, setIsOptimizingPrompt] = useState(false);
+  const takeMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showTakeMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (takeMenuRef.current && !takeMenuRef.current.contains(e.target as Node)) {
+        setShowTakeMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showTakeMenu]);
   
   const [editedDescription, setEditedDescription] = useState(scene.description);
   const [editedPrompt, setEditedPrompt] = useState(scene.visualPrompt);
@@ -99,7 +112,8 @@ export const SceneCard: React.FC<SceneCardProps> = ({
         if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
         setIsPlayingAudio(true);
-        const buffer = await decodeAudio(asset.audioUrl.split(',')[1], audioContextRef.current);
+        const audioB64 = asset.audioUrl.includes(',') ? asset.audioUrl.split(',')[1] : asset.audioUrl;
+        const buffer = await decodeAudio(audioB64, audioContextRef.current);
         const source = audioContextRef.current.createBufferSource();
         source.buffer = buffer;
         source.connect(audioContextRef.current.destination);
@@ -264,6 +278,18 @@ export const SceneCard: React.FC<SceneCardProps> = ({
             )}
         </div>
         
+        {asset?.status === 'error' && (
+          <div className="flex items-center justify-between p-3 mb-4 border border-solar-amber/20 rounded-xl bg-solar-amber/5">
+            <span className="text-[10px] text-solar-amber font-bold uppercase tracking-widest">Generation Failed</span>
+            <button
+              onClick={() => onGenerate(scene.id)}
+              aria-label="Retry scene generation"
+              className="text-[9px] nm-button px-3 py-1.5 rounded-lg text-celestial-stone hover:text-white transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between mt-auto pt-4 border-t border-white/5">
              <div className="flex gap-2">
                  <button onClick={playAudio} disabled={!asset?.audioUrl || isPlayingAudio} className={`w-9 h-9 rounded-xl nm-button flex items-center justify-center transition-all ${isPlayingAudio ? 'text-luna-gold shadow-nm-inset' : 'text-celestial-stone hover:text-white hover:scale-110'}`}>
@@ -277,18 +303,25 @@ export const SceneCard: React.FC<SceneCardProps> = ({
              </div>
              
              <div className="flex gap-2">
-                 <button onClick={() => setIsEditing(true)} className="w-9 h-9 rounded-xl nm-button text-celestial-stone hover:text-white flex items-center justify-center transition-all hover:scale-110"><i className="fa-solid fa-sliders text-[10px]"></i></button>
-                 <div className="relative group/actions">
-                     <button className="h-9 px-5 rounded-xl nm-button-gold text-white flex items-center justify-center text-[9px] font-black uppercase tracking-[0.2em] transition-all shadow-nm-gold hover:scale-105 active:scale-95">Take</button>
-                     <div className="absolute bottom-full right-0 mb-3 w-48 nm-panel rounded-2xl shadow-2xl hidden group-hover/actions:block z-40 py-2 border border-white/5 animate-in fade-in slide-in-from-bottom-2">
-                         <button onClick={() => onGenerate(scene.id)} className="w-full text-left px-4 py-3 text-[10px] font-bold text-starlight hover:bg-luna-gold hover:text-white transition-colors uppercase"><i className="fa-solid fa-sparkles mr-3"></i> Trigger New Take</button>
-                         {asset?.videoUrl && (
-                             <button onClick={() => onExtend(scene.id)} className="w-full text-left px-4 py-3 text-[10px] font-bold text-starlight hover:bg-luna-gold hover:text-white transition-colors uppercase"><i className="fa-solid fa-clock-rotate-left mr-3"></i> Extend (+7s)</button>
-                         )}
-                         <button onClick={() => onInspect?.(scene)} className="w-full text-left px-4 py-3 text-[10px] font-bold text-starlight hover:bg-luna-gold hover:text-white transition-colors uppercase"><i className="fa-solid fa-microscope mr-3"></i> Deep Inspector</button>
-                         <div className="h-px nm-inset-input mx-2 my-1"></div>
-                         <button onClick={() => onClearAsset(scene.id, 'all')} className="w-full text-left px-4 py-3 text-[10px] font-medium text-mystic-gray hover:text-solar-amber transition-colors uppercase"><i className="fa-solid fa-trash-can mr-3"></i> Clear Sequence</button>
-                     </div>
+                 <button onClick={() => setIsEditing(true)} aria-label="Edit scene" className="w-9 h-9 rounded-xl nm-button text-celestial-stone hover:text-white flex items-center justify-center transition-all hover:scale-110"><i className="fa-solid fa-sliders text-[10px]"></i></button>
+                 <div ref={takeMenuRef} className="relative">
+                     <button
+                       onClick={() => setShowTakeMenu(p => !p)}
+                       className="h-9 px-5 rounded-xl nm-button-gold text-white flex items-center justify-center text-[9px] font-black uppercase tracking-[0.2em] transition-all shadow-nm-gold hover:scale-105 active:scale-95"
+                     >
+                       Take
+                     </button>
+                     {showTakeMenu && (
+                       <div className="absolute bottom-full right-0 mb-3 w-48 nm-panel rounded-2xl shadow-2xl z-40 py-2 border border-white/5 animate-in fade-in slide-in-from-bottom-2">
+                           <button onClick={() => { onGenerate(scene.id); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-bold text-starlight hover:bg-luna-gold hover:text-white transition-colors uppercase"><i className="fa-solid fa-sparkles mr-3"></i> Trigger New Take</button>
+                           {asset?.videoUrl && (
+                               <button onClick={() => { onExtend(scene.id); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-bold text-starlight hover:bg-luna-gold hover:text-white transition-colors uppercase"><i className="fa-solid fa-clock-rotate-left mr-3"></i> Extend (+7s)</button>
+                           )}
+                           <button onClick={() => { onInspect?.(scene); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-bold text-starlight hover:bg-luna-gold hover:text-white transition-colors uppercase"><i className="fa-solid fa-microscope mr-3"></i> Deep Inspector</button>
+                           <div className="h-px nm-inset-input mx-2 my-1"></div>
+                           <button onClick={() => { onClearAsset(scene.id, 'all'); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-medium text-mystic-gray hover:text-solar-amber transition-colors uppercase"><i className="fa-solid fa-trash-can mr-3"></i> Clear Sequence</button>
+                       </div>
+                     )}
                  </div>
              </div>
         </div>

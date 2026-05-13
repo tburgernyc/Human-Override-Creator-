@@ -1,0 +1,67 @@
+{
+  "_comment": "Smoke-test fixture for the Renderer pipeline. Covers each Phase-2 failure mode: single-speaker TTS + still image + vignette+bloom (sceneA), multi-speaker TTS + light leak + grain + music-mood change (sceneB), short scene + film burn (sceneC, tests bounded-TTS + boundary stop). audioUrl/imageUrl values are sentinels — the smoke runner substitutes them at load time.",
+  "resolution": "720p",
+  "aspectRatio": "16:9",
+  "cinematicProfile": "natural",
+  "mastering": {
+    "musicVolume": 30,
+    "voiceVolume": 100,
+    "ambientVolume": 40,
+    "filmGrain": 30,
+    "bloomIntensity": 50,
+    "vignetteIntensity": 60,
+    "lightLeakIntensity": 40,
+    "filmBurnIntensity": 70,
+    "lutPreset": "none"
+  },
+  "scenes": [
+    {
+      "id": "scene_a_smoke",
+      "description": "Wide establishing shot at dusk",
+      "visualPrompt": "Cinematic dusk cityscape, golden hour, soft bloom",
+      "charactersInScene": ["Narrator"],
+      "narratorLines": [
+        { "speaker": "Narrator", "text": "Phase one — establishing shot, voice locked to twenty-four kilohertz." }
+      ],
+      "estimatedDuration": 4,
+      "musicMood": "calm",
+      "transition": "fade",
+      "cameraMotion": "zoom_in"
+    },
+    {
+      "id": "scene_b_smoke",
+      "description": "Two-character dialogue with light leak",
+      "visualPrompt": "Two figures in profile, warm rim light, film grain",
+      "charactersInScene": ["Alex", "Jordan"],
+      "narratorLines": [
+        { "speaker": "Alex", "text": "Multi-speaker test, first speaker." },
+        { "speaker": "Jordan", "text": "Multi-speaker test, second speaker." }
+      ],
+      "estimatedDuration": 5,
+      "musicMood": "suspense",
+      "transition": "crossfade",
+      "cameraMotion": "pan_right"
+    },
+    {
+      "id": "scene_c_smoke",
+      "description": "Short closer with film burn",
+      "visualPrompt": "Tight close-up, high contrast, orange flare",
+      "charactersInScene": ["Narrator"],
+      "narratorLines": [
+        { "speaker": "Narrator", "text": "Closer." }
+      ],
+      "estimatedDuration": 2,
+      "musicMood": "action",
+      "transition": "cut",
+      "cameraMotion": "static"
+    }
+  ],
+  "expected": {
+    "totalDurationSec": 11,
+    "fps": 30,
+    "audioSampleRate": 24000,
+    "minBitrateBps": 720000,
+    "maxBitrateBps": 8000000,
+    "containerCandidates": ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/mp4;codecs=h264", "video/webm"]
+  }
+}

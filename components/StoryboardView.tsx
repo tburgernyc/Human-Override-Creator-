@@ -5,7 +5,7 @@ import { Scene, GeneratedAssets } from '../types';
 interface StoryboardViewProps {
   scenes: Scene[];
   assets: GeneratedAssets;
-  onSelectScene: (id: number) => void;
+  onSelectScene: (id: string) => void;
   onClose: () => void;
 }
 

@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { ProjectState, ChatMessage } from '../types';
-import { handleDirectorChat, triggerApiKeySelection } from '../services/gemini';
+import { handleDirectorChat, triggerApiKeySelection, base64ToUint8Array, uint8ArrayToBase64, decodeAudioRaw } from '../services/gemini';
 import { GoogleGenAI, Modality, LiveServerMessage, Type, FunctionDeclaration } from '@google/genai';
 import { LiveWaveform } from './LiveWaveform';
 
@@ -20,48 +20,11 @@ const QUICK_COMMANDS = [
 ];
 
 const DIRECTORIAL_TOOLS: FunctionDeclaration[] = [
-  { name: 'update_scene', description: 'Update a specific scene by ID.', parameters: { type: Type.OBJECT, properties: { scene_id: { type: Type.NUMBER }, updates: { type: Type.OBJECT, properties: { visualPrompt: { type: Type.STRING }, description: { type: Type.STRING }, musicMood: { type: Type.STRING } } } }, required: ['scene_id', 'updates'] } },
+  { name: 'update_scene', description: 'Update a specific scene by ID.', parameters: { type: Type.OBJECT, properties: { scene_id: { type: Type.STRING }, updates: { type: Type.OBJECT, properties: { visualPrompt: { type: Type.STRING }, description: { type: Type.STRING }, musicMood: { type: Type.STRING } } } }, required: ['scene_id', 'updates'] } },
   { name: 'add_character', description: 'Create a new character in the project.', parameters: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, description: { type: Type.STRING }, gender: { type: Type.STRING, enum: ['Male', 'Female'] } }, required: ['name', 'description', 'gender'] } },
   { name: 'suggest_b_roll', description: 'Suggest b-roll scenes for the project.', parameters: { type: Type.OBJECT, properties: {} } }
 ];
 
-function encode(bytes: Uint8Array) {
-  let binary = '';
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function decode(base64: string) {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
-async function decodeAudioData(
-  data: Uint8Array,
-  ctx: AudioContext,
-  sampleRate: number,
-  numChannels: number,
-): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
-  const frameCount = dataInt16.length / numChannels;
-  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-
-  for (let channel = 0; channel < numChannels; channel++) {
-    const channelData = buffer.getChannelData(channel);
-    for (let i = 0; i < frameCount; i++) {
-      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-    }
-  }
-  return buffer;
-}
 
 export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
   project,
@@ -134,9 +97,12 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
       return;
     }
 
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      await triggerApiKeySelection();
+    const aistudio = (window as any).aistudio;
+    if (aistudio) {
+      const hasKey = await aistudio.hasSelectedApiKey();
+      if (!hasKey) { await triggerApiKeySelection(); return; }
+    } else {
+      setMessages(prev => [...prev, { role: 'system', content: "Live mode requires AI Studio. Text chat is fully available." }]);
       return;
     }
 
@@ -147,7 +113,7 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
 
       setMessages(prev => [...prev, { role: 'system', content: "Initializing Live Multi-Modal Directorial Interface..." }]);
 
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: '' }); // AI Studio injects key in this context
       const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       const outputNode = outputAudioContext.createGain();
@@ -166,7 +132,7 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
               const source = inputAudioContext.createMediaStreamSource(stream);
               const workletNode = new AudioWorkletNode(inputAudioContext, 'mic-processor');
               workletNode.port.onmessage = (e) => {
-                const base64 = encode(new Uint8Array(e.data));
+                const base64 = uint8ArrayToBase64(new Uint8Array(e.data));
                 sessionPromise.then(s => s.sendRealtimeInput({
                   media: { data: base64, mimeType: 'audio/pcm;rate=16000' }
                 }));
@@ -184,7 +150,7 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
                 for (let i = 0; i < inputData.length; i++) {
                   int16[i] = inputData[i] * 32768;
                 }
-                const base64 = encode(new Uint8Array(int16.buffer));
+                const base64 = uint8ArrayToBase64(new Uint8Array(int16.buffer));
                 sessionPromise.then(s => s.sendRealtimeInput({
                   media: { data: base64, mimeType: 'audio/pcm;rate=16000' }
                 }));
@@ -207,7 +173,7 @@ export const DirectorAssistant: React.FC<DirectorAssistantProps> = ({
             const audioData = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData) {
               nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
-              const audioBuffer = await decodeAudioData(decode(audioData), outputAudioContext, 24000, 1);
+              const audioBuffer = await decodeAudioRaw(base64ToUint8Array(audioData), outputAudioContext, 24000, 1);
               const src = outputAudioContext.createBufferSource();
               src.buffer = audioBuffer;
               src.connect(outputNode);

@@ -12,7 +12,7 @@ export const AudioMixer: React.FC<AudioMixerProps> = ({ mastering, onUpdate, onC
   const faders = [
     { key: 'voiceVolume', label: 'Narrative Core', icon: 'fa-microphone-lines', color: 'text-luna-gold', value: mastering?.voiceVolume || 100 },
     { key: 'musicVolume', label: 'Cinematic Score', icon: 'fa-music', color: 'text-solar-amber', value: mastering?.musicVolume || 15 },
-    { key: 'ambientVolume', label: 'Atmosphere', icon: 'fa-wind', color: 'text-deep-sage', value: 30 }, // Defaulting ambient
+    { key: 'ambientVolume', label: 'Atmosphere', icon: 'fa-wind', color: 'text-deep-sage', value: mastering?.ambientVolume ?? 30 },
   ];
 
   return (

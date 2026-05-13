@@ -5,8 +5,8 @@ import { Scene, GeneratedAssets } from '../types';
 interface ProductionTimelineProps {
   scenes: Scene[];
   assets: GeneratedAssets;
-  currentSceneId?: number;
-  onSelectScene: (id: number) => void;
+  currentSceneId?: string;
+  onSelectScene: (id: string) => void;
 }
 
 export const ProductionTimeline: React.FC<ProductionTimelineProps> = ({ 

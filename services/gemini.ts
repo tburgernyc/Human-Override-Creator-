@@ -13,10 +13,44 @@ const cleanJsonResponse = (text: string): string => {
   return clean;
 };
 
-const getAIClient = async (): Promise<GoogleGenAI> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found.");
-  return new GoogleGenAI({ apiKey });
+// Parses a Gemini text response that is expected to contain JSON. On failure,
+// surfaces the raw response so a malformed/safety-filtered reply doesn't
+// silently turn into an empty object.
+const parseJsonResponse = <T = any>(text: string | undefined, fallback?: T): T => {
+  const raw = text || '';
+  const cleaned = cleanJsonResponse(raw);
+  if (!cleaned) {
+    if (fallback !== undefined) return fallback;
+    throw new Error('Gemini returned an empty response (likely safety-filtered).');
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch (e: any) {
+    const preview = raw.slice(0, 500);
+    throw new Error(`Failed to parse JSON response from Gemini: ${e.message}\nFirst 500 chars: ${preview}`);
+  }
+};
+
+// Strips the `data:<mime>;base64,` prefix from a data URI. Throws if no
+// comma is present — preferable to silently passing undefined downstream.
+const stripDataUriPrefix = (s: string): string => {
+  const idx = s.indexOf(',');
+  if (idx < 0) throw new Error('Expected data URI with base64 prefix, got raw string.');
+  return s.slice(idx + 1);
+};
+
+// Routes all SDK calls through the secure API proxy, keeping the API key server-side.
+// In production (Vercel), uses the current page's origin so no env var is needed.
+// Locally, falls back to VITE_PROXY_URL or the Express dev proxy on port 3001.
+const PROXY_BASE_URL: string = (import.meta as any).env?.VITE_PROXY_URL ??
+  (typeof window !== 'undefined'
+    ? `${window.location.origin}/api/gemini`
+    : 'http://localhost:3001/api/gemini');
+
+const getAIClient = (): GoogleGenAI => {
+  // apiVersion: '' prevents the SDK from prepending 'v1beta/' to paths.
+  // The proxy re-adds it when forwarding to googleapis.com.
+  return new GoogleGenAI({ apiKey: 'proxy', httpOptions: { baseUrl: PROXY_BASE_URL, apiVersion: '' } });
 };
 
 const retryWithBackoff = async <T>(
@@ -67,7 +101,7 @@ STYLE: Urgent, cinematic, investigative, plausible dystopian. Use short sentence
 `;
 
 export const handleDirectorChat = async (message: string, currentProject: ProjectState, chatHistory: { role: 'user' | 'model', content: string }[]): Promise<GenerateContentResponse> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
 
   const tools: FunctionDeclaration[] = [
     { name: 'get_project_context', description: 'Returns the full project state.', parameters: { type: Type.OBJECT, properties: {} } },
@@ -86,7 +120,7 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
       parameters: {
         type: Type.OBJECT,
         properties: {
-          scene_id: { type: Type.NUMBER },
+          scene_id: { type: Type.STRING },
           updates: { type: Type.OBJECT, properties: { visualPrompt: { type: Type.STRING }, description: { type: Type.STRING }, musicMood: { type: Type.STRING }, ambientSfx: { type: Type.STRING } } }
         },
         required: ['scene_id', 'updates']
@@ -112,7 +146,7 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
             items: {
               type: Type.OBJECT,
               properties: {
-                sceneId: { type: Type.NUMBER },
+                sceneId: { type: Type.STRING },
                 updates: { type: Type.OBJECT, properties: { visualPrompt: { type: Type.STRING }, musicMood: { type: Type.STRING }, cameraMotion: { type: Type.STRING } } }
               }
             }
@@ -150,7 +184,7 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
 };
 
 export const performFullAudit = async (project: ProjectState): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const prompt = `Perform a comprehensive directorial audit of the following project.
     Project Summary: ${project.scenes.length} scenes, ${project.characters.length} characters.
     Global Style: ${project.globalStyle}.
@@ -166,7 +200,7 @@ export const performFullAudit = async (project: ProjectState): Promise<string> =
 };
 
 export const synthesizeCharacterPersona = async (name: string, gender: 'Male' | 'Female', style: string, seed?: number): Promise<Partial<Character>> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const schema = {
     type: Type.OBJECT,
     properties: {
@@ -177,8 +211,8 @@ export const synthesizeCharacterPersona = async (name: string, gender: 'Male' | 
     required: ["description", "visualPrompt", "suggestedVoiceId"]
   };
 
-  const prompt = `Create a cinematic character profile for "${name}" (${gender}) within the visual style of "${style}". 
-  Provide a detailed backstory and a high-fidelity visual prompt for AI image generation. 
+  const prompt = `Create a cinematic character profile for "${name}" (${gender}) within the visual style of "${style}".
+  Provide a detailed backstory and a high-fidelity visual prompt for AI image generation.
   Suggest a voice type from: ${VOICE_PRESETS.map(v => v.id).join(', ')}.`;
 
   const response = await ai.models.generateContent({
@@ -187,7 +221,7 @@ export const synthesizeCharacterPersona = async (name: string, gender: 'Male' | 
     config: { responseMimeType: "application/json", responseSchema: schema, thinkingConfig: { thinkingBudget: 4000 }, seed }
   });
 
-  const data = JSON.parse(cleanJsonResponse(response.text || "{}"));
+  const data = parseJsonResponse<any>(response.text);
   return {
     description: data.description,
     visualPrompt: data.visualPrompt,
@@ -196,7 +230,7 @@ export const synthesizeCharacterPersona = async (name: string, gender: 'Male' | 
 };
 
 export const suggestBRoll = async (project: ProjectState): Promise<Scene[]> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const schema = {
     type: Type.ARRAY,
     items: {
@@ -212,9 +246,9 @@ export const suggestBRoll = async (project: ProjectState): Promise<Scene[]> => {
     }
   };
 
-  const prompt = `Analyze this video project and suggest 3 high-impact B-Roll intercut scenes to improve visual density and variety. 
-    Current Scenes: ${project.scenes.map(s => s.description).join(' | ')}. 
-    Style: ${project.globalStyle}. 
+  const prompt = `Analyze this video project and suggest 3 high-impact B-Roll intercut scenes to improve visual density and variety.
+    Current Scenes: ${project.scenes.map(s => s.description).join(' | ')}.
+    Style: ${project.globalStyle}.
     Each B-Roll scene should be short (1-3s) and relevant to the narrative gaps. Output JSON.`;
 
   const response = await ai.models.generateContent({
@@ -223,11 +257,11 @@ export const suggestBRoll = async (project: ProjectState): Promise<Scene[]> => {
     config: { responseMimeType: "application/json", responseSchema: schema, thinkingConfig: { thinkingBudget: 4000 }, seed: project.productionSeed }
   });
 
-  return JSON.parse(cleanJsonResponse(response.text || "[]"));
+  return parseJsonResponse<any[]>(response.text, []);
 };
 
 export const analyzeViralPotential = async (script: string, seed?: number): Promise<ViralPotential> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const schema = {
     type: Type.OBJECT,
     properties: {
@@ -240,8 +274,8 @@ export const analyzeViralPotential = async (script: string, seed?: number): Prom
     required: ["hookScore", "retentionCatalysts", "engagementFriction", "heatmap", "predictionSummary"]
   };
 
-  const prompt = `Perform a viral psychology analysis on this video script for a YouTube audience. 
-    Assess hook strength, pacing, and emotional peaks. 
+  const prompt = `Perform a viral psychology analysis on this video script for a YouTube audience.
+    Assess hook strength, pacing, and emotional peaks.
     Provide a 5-point heatmap (values 0-1) representing relative engagement. Output JSON.`;
 
   const response = await ai.models.generateContent({
@@ -250,11 +284,11 @@ export const analyzeViralPotential = async (script: string, seed?: number): Prom
     config: { responseMimeType: "application/json", responseSchema: schema, thinkingConfig: { thinkingBudget: 4000 }, seed }
   });
 
-  return JSON.parse(cleanJsonResponse(response.text || "{}"));
+  return parseJsonResponse<any>(response.text);
 };
 
 export const generateMarketingContent = async (platform: string, script: string, metadata: any): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const prompt = `Generate a high-engagement ${platform} post for a video with the following script and metadata:
   Script: ${script.substring(0, 2000)}
   Audience: ${metadata.audience}
@@ -269,7 +303,7 @@ export const generateMarketingContent = async (platform: string, script: string,
 };
 
 export const generateThumbnail = async (title: string, characters: Character[], style: string): Promise<{ imageUrl: string, suggestedText: string }> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const textPrompt = `Suggest a short (max 3 words), high-impact text overlay for a YouTube thumbnail with the title: "${title}"`;
   const textRes = await ai.models.generateContent({
     model: MODEL_NAMES.CHECK,
@@ -281,7 +315,7 @@ export const generateThumbnail = async (title: string, characters: Character[], 
   const imgPrompt = `YouTube thumbnail background for a video titled "${title}". ${charContext} Style: ${style}. High contrast, vibrant, eye-catching.`;
 
   const imgRes = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
+    model: MODEL_NAMES.IMAGE,
     contents: imgPrompt,
     config: { imageConfig: { aspectRatio: "16:9" } }
   });
@@ -301,7 +335,7 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
   modules: ProjectModules,
   metadata: { hookScore: number, audience: string, suggestedTitles: string[] }
 }> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const analysisSchema = {
     type: Type.OBJECT,
     properties: {
@@ -356,9 +390,9 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
     config: { responseMimeType: "application/json", responseSchema: analysisSchema, thinkingConfig: { thinkingBudget: 12000 }, seed }
   }));
 
-  const data = JSON.parse(cleanJsonResponse(response.text || "{}"));
+  const data = parseJsonResponse<any>(response.text);
   return {
-    characters: data.characters.map((c: any, i: number) => ({ ...c, id: `char_${crypto.randomUUID()}`, voiceId: VOICE_PRESETS[0].id, voiceSettings: { pitch: 0, speed: 1 } })),
+    characters: data.characters.map((c: any) => ({ ...c, id: `char_${crypto.randomUUID()}`, voiceId: VOICE_PRESETS[0].id, voiceSettings: { pitch: 0, speed: 1 } })),
     scenes: data.scenes.map((s: any) => ({ ...s, id: crypto.randomUUID(), cameraMotion: 'random_cinematic', transition: 'fade' })),
     tasks: (data.tasks || []).map((t: any, i: number) => ({ ...t, id: `task_${i}`, status: 'pending' })),
     modules: data.modules,
@@ -367,9 +401,9 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
 };
 
 export const generateCharacterImage = async (character: Character, resolution: Resolution, style: string, seed?: number): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
+    model: MODEL_NAMES.IMAGE,
     contents: `${style} character portrait of ${character.name}. ${character.visualPrompt}. Professional studio lighting. High fidelity.`,
     config: { imageConfig: { aspectRatio: "1:1" }, seed }
   });
@@ -379,23 +413,23 @@ export const generateCharacterImage = async (character: Character, resolution: R
 };
 
 export const generateSceneImage = async (scene: Scene, characters: Character[], aspectRatio: AspectRatio, resolution: Resolution, feedback?: string, style: string = "Cinematic", seed?: number, styleReferenceBase64?: string): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const parts: any[] = [];
 
   if (styleReferenceBase64) {
-    parts.push({ inlineData: { mimeType: 'image/png', data: styleReferenceBase64.split(',')[1] } });
+    parts.push({ inlineData: { mimeType: 'image/png', data: stripDataUriPrefix(styleReferenceBase64) } });
     parts.push({ text: "Use this image as a Master Style Reference for color palette and lighting." });
   }
 
   characters.filter(c => scene.charactersInScene.includes(c.name) && c.referenceImageBase64).forEach(c => {
-    parts.push({ inlineData: { mimeType: 'image/png', data: c.referenceImageBase64!.split(',')[1] } });
+    parts.push({ inlineData: { mimeType: 'image/png', data: stripDataUriPrefix(c.referenceImageBase64!) } });
     parts.push({ text: `Maintain visual consistency for character: ${c.name}.` });
   });
 
   parts.push({ text: `Style: ${style}. Scene Description: ${scene.visualPrompt}. ${feedback || ''}. Cinematic 8k rendering. High quality textures.` });
 
   const response = await ai.models.generateContent({
-    model: resolution === Resolution.FHD ? MODEL_NAMES.IMAGE : 'gemini-2.5-flash-image',
+    model: MODEL_NAMES.IMAGE,
     contents: { parts },
     config: { imageConfig: { aspectRatio, imageSize: resolution === Resolution.FHD ? '2K' : '1K' }, seed }
   });
@@ -405,22 +439,35 @@ export const generateSceneImage = async (scene: Scene, characters: Character[], 
 };
 
 export const generateSceneVideo = async (imageBase64: string, prompt: string, aspectRatio: AspectRatio, resolution: Resolution, style: string = "Cinematic"): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   let operation: any = await ai.models.generateVideos({
     model: resolution === Resolution.FHD ? MODEL_NAMES.VIDEO : MODEL_NAMES.VIDEO_FAST,
     prompt: `${style}. ${prompt}. Subtle cinematic motion.`,
-    image: { imageBytes: imageBase64.split(',')[1], mimeType: 'image/png' },
+    image: { imageBytes: stripDataUriPrefix(imageBase64), mimeType: 'image/png' },
     config: { numberOfVideos: 1, aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any, resolution }
   });
-  while (!operation.done) { await new Promise(r => setTimeout(r, 10000)); operation = await ai.operations.getVideosOperation({ operation }); }
+
+  // Exponential backoff with 30s cap; total wall-clock budget 10 min.
+  const startedAt = Date.now();
+  const TOTAL_BUDGET_MS = 10 * 60 * 1000;
+  let attempt = 0;
+  while (!operation.done) {
+    if (Date.now() - startedAt > TOTAL_BUDGET_MS) throw new Error('Video generation timed out after 10 minutes.');
+    const delay = Math.min(2 ** attempt * 1000, 30000);
+    await new Promise(r => setTimeout(r, delay));
+    attempt++;
+    operation = await ai.operations.getVideosOperation({ operation });
+  }
+
   const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
   if (!videoUri) throw new Error('Video generation completed but returned no video URI.');
-  const blob = await (await fetch(`${videoUri}&key=${process.env.API_KEY}`)).blob();
+  // Route download through the proxy so the API key is never in the client
+  const blob = await (await fetch(`/api/download?uri=${encodeURIComponent(videoUri)}`)).blob();
   return await blobToBase64(blob);
 };
 
 export const extendSceneVideo = async (prevVideoUri: string, prompt: string, aspectRatio: AspectRatio): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   // Only 720p videos can be extended currently according to guidelines
   let operation: any = await ai.models.generateVideos({
     model: 'veo-3.1-generate-preview',
@@ -432,15 +479,26 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
       aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any
     }
   });
-  while (!operation.done) { await new Promise(r => setTimeout(r, 10000)); operation = await ai.operations.getVideosOperation({ operation }); }
+
+  const startedAt = Date.now();
+  const TOTAL_BUDGET_MS = 10 * 60 * 1000;
+  let attempt = 0;
+  while (!operation.done) {
+    if (Date.now() - startedAt > TOTAL_BUDGET_MS) throw new Error('Video extension timed out after 10 minutes.');
+    const delay = Math.min(2 ** attempt * 1000, 30000);
+    await new Promise(r => setTimeout(r, delay));
+    attempt++;
+    operation = await ai.operations.getVideosOperation({ operation });
+  }
+
   const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
   if (!videoUri) throw new Error('Video extension completed but returned no video URI.');
-  const blob = await (await fetch(`${videoUri}&key=${process.env.API_KEY}`)).blob();
+  const blob = await (await fetch(`/api/download?uri=${encodeURIComponent(videoUri)}`)).blob();
   return await blobToBase64(blob);
 };
 
 export const generateSceneAudio = async (lines: DialogueLine[], characters: Character[]): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const speakersInScene = Array.from(new Set(lines.map(l => l.speaker)));
 
   if (speakersInScene.length === 2) {
@@ -470,18 +528,31 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
     return data ? `data:audio/pcm;base64,${data}` : "";
   }
 
+  // Parallelize TTS for single-speaker or 3+ speaker scenarios.
+  // Use allSettled so one bad line doesn't kill the whole scene's audio.
+  const filteredLines = lines.filter(line => line.text.trim());
+  const settled = await Promise.allSettled(
+    filteredLines.map(line => {
+      const char = characters.find(c => c.name === line.speaker);
+      const preset = VOICE_PRESETS.find(p => p.id === char?.voiceId) || VOICE_PRESETS[0];
+      return ai.models.generateContent({
+        model: MODEL_NAMES.TTS,
+        contents: [{ parts: [{ text: `<speak><prosody rate="${char?.voiceSettings?.speed || 1}" pitch="${char?.voiceSettings?.pitch || 0}st">${line.text}</prosody></speak>` }] }],
+        config: { responseModalities: [Modality.AUDIO], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: preset.apiVoiceName } } } }
+      }).then(res => {
+        const data = res.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        return data ? base64ToUint8Array(data) : null;
+      });
+    })
+  );
+
   const parts: Uint8Array[] = [];
-  for (const line of lines) {
-    if (!line.text.trim()) continue;
-    const char = characters.find(c => c.name === line.speaker);
-    const preset = VOICE_PRESETS.find(p => p.id === char?.voiceId) || VOICE_PRESETS[0];
-    const res = await ai.models.generateContent({
-      model: MODEL_NAMES.TTS,
-      contents: [{ parts: [{ text: `<speak><prosody rate="${char?.voiceSettings?.speed || 1}" pitch="${char?.voiceSettings?.pitch || 0}st">${line.text}</prosody></speak>` }] }],
-      config: { responseModalities: [Modality.AUDIO], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: preset.apiVoiceName } } } }
-    });
-    const data = res.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (data) parts.push(base64ToUint8Array(data));
+  settled.forEach((r, i) => {
+    if (r.status === 'fulfilled' && r.value) parts.push(r.value);
+    else if (r.status === 'rejected') console.error(`TTS line ${i} failed:`, r.reason);
+  });
+  if (parts.length === 0 && filteredLines.length > 0) {
+    throw new Error(`All ${filteredLines.length} TTS line(s) failed.`);
   }
   return parts.length ? `data:audio/pcm;base64,${uint8ArrayToBase64(concatUint8Arrays(parts))}` : "";
 };
@@ -489,13 +560,13 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
 export const triggerApiKeySelection = async () => { if (typeof window !== 'undefined' && window.aistudio) await window.aistudio.openSelectKey(); };
 
 export const optimizeVisualPrompt = async (line: string, style: string): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const res = await ai.models.generateContent({ model: MODEL_NAMES.CHECK, contents: `Optimize for ${style}: ${line}` });
   return res.text || line;
 };
 
 export const previewVoice = async (voiceId: string, settings: { speed: number, pitch: number }): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const preset = VOICE_PRESETS.find(p => p.id === voiceId) || VOICE_PRESETS[0];
   const res = await ai.models.generateContent({
     model: MODEL_NAMES.TTS,
@@ -505,17 +576,23 @@ export const previewVoice = async (voiceId: string, settings: { speed: number, p
   return res.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || "";
 };
 
-function base64ToUint8Array(base64: string): Uint8Array {
+export function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
   return bytes;
 }
-function uint8ArrayToBase64(bytes: Uint8Array): string {
+
+// Chunked approach avoids O(n²) string concatenation and call-stack overflow on large audio buffers
+export function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000; // 32KB chunks
   let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
   return btoa(binary);
 }
+
 function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
   const totalLength = arrays.reduce((acc, arr) => acc + arr.length, 0);
   const result = new Uint8Array(totalLength);
@@ -523,6 +600,7 @@ function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
   for (const arr of arrays) { result.set(arr, offset); offset += arr.length; }
   return result;
 }
+
 export const blobToBase64 = (blob: Blob): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onloadend = () => resolve(reader.result as string);
@@ -530,26 +608,69 @@ export const blobToBase64 = (blob: Blob): Promise<string> => new Promise((resolv
   reader.readAsDataURL(blob);
 });
 
+// WAV header sniffer: if the payload starts with a RIFF/WAVE header (which
+// Gemini's multi-speaker TTS sometimes emits), read the true sample rate and
+// channel count and skip past the header to the raw PCM data. Falls back to
+// the single-speaker default of 24kHz mono otherwise.
+const sniffWavHeader = (bytes: Uint8Array): { sampleRate: number; numChannels: number; dataOffset: number } | null => {
+  if (bytes.length < 44) return null;
+  const isRiff = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+  const isWave = bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45;
+  if (!isRiff || !isWave) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // Walk chunks starting at offset 12 to find 'fmt ' and 'data'
+  let offset = 12;
+  let sampleRate = 0;
+  let numChannels = 0;
+  let dataOffset = -1;
+  while (offset + 8 <= bytes.length) {
+    const chunkId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+    const chunkSize = view.getUint32(offset + 4, true);
+    if (chunkId === 'fmt ') {
+      numChannels = view.getUint16(offset + 10, true);
+      sampleRate = view.getUint32(offset + 12, true);
+    } else if (chunkId === 'data') {
+      dataOffset = offset + 8;
+      break;
+    }
+    offset += 8 + chunkSize;
+  }
+  if (!sampleRate || !numChannels || dataOffset < 0) return null;
+  return { sampleRate, numChannels, dataOffset };
+};
+
 export const decodeAudio = async (base64: string, ctx: AudioContext): Promise<AudioBuffer> => {
   const bytes = base64ToUint8Array(base64);
-  // Raw PCM from Gemini is 16-bit little-endian mono 24kHz
-  const numChannels = 1;
-  const sampleRate = 24000;
-  const dataInt16 = new Int16Array(bytes.buffer);
-  const frameCount = dataInt16.length / numChannels;
-  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+  const wav = sniffWavHeader(bytes);
+  if (wav) {
+    if (wav.sampleRate !== 24000 || wav.numChannels !== 1) {
+      console.warn(`decodeAudio: non-default WAV format detected (${wav.sampleRate}Hz, ${wav.numChannels}ch)`);
+    }
+    return decodeAudioRaw(bytes.subarray(wav.dataOffset), ctx, wav.sampleRate, wav.numChannels);
+  }
+  return decodeAudioRaw(bytes, ctx, 24000, 1);
+};
 
+// Raw PCM decoder — accepts Uint8Array directly (used by DirectorAssistant live audio playback)
+export const decodeAudioRaw = async (data: Uint8Array, ctx: AudioContext, sampleRate: number, numChannels: number): Promise<AudioBuffer> => {
+  // Raw PCM from Gemini is 16-bit little-endian. Honor the Uint8Array's
+  // byteOffset/byteLength so subarray() views decode correctly.
+  const aligned = data.byteOffset % 2 === 0 && data.byteLength % 2 === 0
+    ? new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2)
+    : new Int16Array(data.slice().buffer);
+  const frameCount = Math.floor(aligned.length / numChannels);
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
   for (let channel = 0; channel < numChannels; channel++) {
     const channelData = buffer.getChannelData(channel);
     for (let i = 0; i < frameCount; i++) {
-      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+      channelData[i] = aligned[i * numChannels + channel] / 32768.0;
     }
   }
   return buffer;
-}
+};
 
 export const generateVideoScript = async (topic: string): Promise<string> => {
-  const ai = await getAIClient();
+  const ai = getAIClient();
   const res = await ai.models.generateContent({ model: MODEL_NAMES.THINKING, contents: `High-quality video script: ${topic}. Use [Scene: ...] format.`, config: { thinkingBudget: 4000 } } as any);
   return res.text || "";
 };

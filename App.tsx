@@ -47,21 +47,23 @@ const ALL_PROJECTS_KEY = 'human_override_archives_v5';
 
 type ProductionPhase = 'genesis' | 'manifest' | 'synthesis' | 'post';
 
-const App: React.FC = () => {
-  const DEFAULT_PROJECT: ProjectState = {
-    script: '', status: 'idle', characters: [], scenes: [], assets: {}, tasks: [], modules: {}, productionLog: [],
-    currentStepMessage: '', globalStyle: VISUAL_STYLES[0], productionSeed: Math.floor(Math.random() * 1000000),
-    activeDraft: null,
-    mastering: {
-      musicVolume: 15, voiceVolume: 100, ambientVolume: 30, filmGrain: 5,
-      bloomIntensity: 10, vignetteIntensity: 30, lightLeakIntensity: 20, filmBurnIntensity: 10, lutPreset: 'none'
-    }
-  };
+// Module-level constant so productionSeed is stable and no new object is created on each render
+const DEFAULT_PROJECT: ProjectState = {
+  script: '', status: 'idle', characters: [], scenes: [], assets: {}, tasks: [], modules: {}, productionLog: [],
+  currentStepMessage: '', globalStyle: VISUAL_STYLES[0], productionSeed: Math.floor(Math.random() * 1000000),
+  activeDraft: null,
+  mastering: {
+    musicVolume: 15, voiceVolume: 100, ambientVolume: 30, filmGrain: 5,
+    bloomIntensity: 10, vignetteIntensity: 30, lightLeakIntensity: 20, filmBurnIntensity: 10, lutPreset: 'none'
+  }
+};
 
+const App: React.FC = () => {
   const [project, setProject] = useState<ProjectState>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
+      // Always start with empty assets — base64 binaries are too large for localStorage
+      if (saved) return { ...DEFAULT_PROJECT, ...JSON.parse(saved), assets: {} };
     } catch (e) {
       console.warn('Corrupted project data in localStorage, resetting to defaults.', e);
       localStorage.removeItem(LOCAL_STORAGE_KEY);
@@ -109,7 +111,7 @@ const App: React.FC = () => {
   const [currentTaskLabel, setCurrentTaskLabel] = useState("");
   const [hasAuth, setHasAuth] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [youtubeMetadata, setYoutubeMetadata] = useState<any | null>(null);
+  const [youtubeMetadata, setYoutubeMetadata] = useState<{ hookScore: number; audience: string; suggestedTitles: string[] } | null>(null);
   const [autoDiagnosisTriggered, setAutoDiagnosisTriggered] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -123,7 +125,18 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(project));
+    // Debounce saves and strip binary assets — base64 images/videos exceed localStorage quota
+    const timer = setTimeout(() => {
+      try {
+        const { assets: _stripped, ...persistable } = project;
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(persistable));
+      } catch (e: any) {
+        if (e.name === 'QuotaExceededError') {
+          console.warn('localStorage quota exceeded — project metadata not saved.');
+        }
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
   }, [project]);
 
   useEffect(() => {
@@ -208,7 +221,7 @@ const App: React.FC = () => {
       return "Module updated.";
     } else if (name === 'suggest_b_roll') {
       const suggestions = await suggestBRoll(project);
-      setBRollSuggestions(suggestions.map((s, i) => ({ ...s, id: Date.now() + i })));
+      setBRollSuggestions(suggestions.map(s => ({ ...s, id: crypto.randomUUID() })));
       setShowBRoll(true);
       return "B-Roll synthesis complete. Review suggestions in the terminal.";
     }
@@ -230,7 +243,7 @@ const App: React.FC = () => {
     } catch (error) { addLog("Analysis failure.", "error"); }
   };
 
-  const handleGenerateSceneAsset = async (sceneId: number, feedback?: string) => {
+  const handleGenerateSceneAsset = async (sceneId: string, feedback?: string) => {
     const scene = project.scenes.find(s => s.id === sceneId);
     if (!scene) return;
 
@@ -250,11 +263,21 @@ const App: React.FC = () => {
       const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
       const styleRef = moodboardImg || keyArtImg;
 
+      // Phase 1: Image — fatal if fails
       const img = await generateSceneImage(scene, project.characters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: 'generating_video' } } }));
 
+      // Phase 2: Video — fatal if fails
       const video = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
-      const audio = await generateSceneAudio(scene.narratorLines, project.characters);
+      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl: video, status: 'generating_audio' } } }));
+
+      // Phase 3: Audio — non-fatal; visual assets are preserved if this fails
+      let audio: string | undefined;
+      try {
+        audio = await generateSceneAudio(scene.narratorLines, project.characters);
+      } catch {
+        addLog(`Audio synthesis failed for Scene #${sceneId} — visual assets preserved.`, 'error');
+      }
 
       const finalVariant: AssetHistoryItem = { imageUrl: img, videoUrl: video, timestamp: Date.now() };
 
@@ -281,7 +304,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleExtendScene = async (sceneId: number) => {
+  const handleExtendScene = async (sceneId: string) => {
     const scene = project.scenes.find(s => s.id === sceneId);
     const asset = project.assets[sceneId];
     if (!scene || !asset?.videoUrl) return;
@@ -345,7 +368,7 @@ const App: React.FC = () => {
     addLog(`${newScenes.length} B-Roll scenes injected.`, "success");
   };
 
-  const handleMoveScene = (id: number, direction: 'prev' | 'next') => {
+  const handleMoveScene = (id: string, direction: 'prev' | 'next') => {
     setProject(prev => {
       const idx = prev.scenes.findIndex(s => s.id === id);
       const nextIdx = direction === 'prev' ? idx - 1 : idx + 1;
@@ -357,7 +380,7 @@ const App: React.FC = () => {
     });
   };
 
-  const handleClearAsset = (sceneId: number, type: 'visual' | 'audio' | 'all') => {
+  const handleClearAsset = (sceneId: string, type: 'visual' | 'audio' | 'all') => {
     setProject(prev => {
       const newAssets = { ...prev.assets };
       if (!newAssets[sceneId]) return prev;
@@ -370,7 +393,7 @@ const App: React.FC = () => {
     });
   };
 
-  const handleSelectVariant = (sceneId: number, variant: AssetHistoryItem) => {
+  const handleSelectVariant = (sceneId: string, variant: AssetHistoryItem) => {
     setProject(prev => ({
       ...prev,
       assets: {
@@ -380,12 +403,12 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleSetKeyArt = (sceneId: number) => {
+  const handleSetKeyArt = (sceneId: string) => {
     setProject(p => ({ ...p, keyArtSceneId: sceneId }));
     addLog(`Master Style Reference locked to Scene #${project.scenes.findIndex(s => s.id === sceneId) + 1}.`, "success");
   };
 
-  const scrollToScene = (id: number) => {
+  const scrollToScene = (id: string) => {
     const el = document.getElementById(`scene-${id}`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
@@ -402,7 +425,28 @@ const App: React.FC = () => {
         {view === 'landing' && <LandingPage onStart={() => setView('dashboard')} />}
         {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { setProject(p); setView('dashboard'); }} onDelete={idx => setArchives(prev => prev.filter((_, i) => i !== idx))} onImport={() => fileInputRef.current?.click()} />}
 
-        <input type="file" ref={fileInputRef} className="hidden" accept=".json" />
+        <input
+          type="file"
+          ref={fileInputRef}
+          className="hidden"
+          accept=".json"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              try {
+                const data = JSON.parse(ev.target!.result as string);
+                setProject({ ...DEFAULT_PROJECT, ...data, assets: {} });
+                setView('dashboard');
+              } catch {
+                addLog('Project import failed: invalid JSON.', 'error');
+              }
+            };
+            reader.readAsText(file);
+            e.target.value = '';
+          }}
+        />
 
         {view === 'dashboard' && (
           <div className="flex flex-col gap-10 pt-8 relative max-w-[1400px] mx-auto animate-in fade-in duration-700 px-4 sm:px-0">
@@ -559,7 +603,7 @@ const App: React.FC = () => {
                           onUpdate={(id, s) => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === id ? s : sc) }))}
                           onMove={(dir) => handleMoveScene(scene.id, dir)}
                           onDelete={(id) => setProject(p => ({ ...p, scenes: p.scenes.filter(s => s.id !== id) }))}
-                          onDuplicate={() => setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: Date.now() }] }))}
+                          onDuplicate={() => setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: crypto.randomUUID() }] }))}
                           onInspect={setInspectingScene}
                           onSelectVariant={handleSelectVariant}
                           onClearAsset={handleClearAsset}

@@ -13,6 +13,9 @@ dist-ssr
 *.local
 .env
 
+# Claude Code harness state (project-local settings, scheduled-task locks)
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

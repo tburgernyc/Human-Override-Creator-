@@ -13,6 +13,54 @@ const AMBIENT_TRACKS: Record<string, string> = {
     data_stream: "https://upload.wikimedia.org/wikipedia/commons/e/ef/Teletype_Model_33.ogg"
 };
 
+const TARGET_FPS = 30;
+const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
+const MEDIA_LOAD_TIMEOUT_MS = 15000;
+
+// Probe MediaRecorder support in fallback order. Returns the first supported
+// mime type or null when none of the candidates work in this browser.
+const pickMimeType = (): string | null => {
+    const candidates = [
+        'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8',
+        'video/mp4;codecs=h264',
+        'video/webm',
+    ];
+    for (const c of candidates) {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return null;
+};
+
+// Adaptive bitrate: ~0.1 bits per pixel-second, clamped to a sane range so
+// 720p doesn't waste bandwidth and 4K doesn't blow up file size.
+const computeBitrate = (w: number, h: number, fps: number): number => {
+    const raw = Math.round(w * h * fps * 0.1);
+    return Math.max(2_000_000, Math.min(20_000_000, raw));
+};
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, Math.max(0, ms)));
+
+// Load an image or video with a hard timeout so a missing asset can't hang
+// the entire render. Resolves on success, rejects on error or timeout.
+const loadMedia = (el: HTMLImageElement | HTMLVideoElement, src: string, timeoutMs: number): Promise<void> => {
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const finish = (fn: () => void) => { if (!done) { done = true; fn(); } };
+        const timer = setTimeout(() => finish(() => reject(new Error(`media load timeout: ${src.slice(0, 60)}`))), timeoutMs);
+        const onOk = () => finish(() => { clearTimeout(timer); resolve(); });
+        const onErr = () => finish(() => { clearTimeout(timer); reject(new Error(`media load error: ${src.slice(0, 60)}`)); });
+        if (el instanceof HTMLImageElement) {
+            el.onload = onOk;
+            el.onerror = onErr;
+        } else {
+            el.onloadeddata = onOk;
+            el.onerror = onErr;
+        }
+        el.src = src;
+    });
+};
+
 interface RendererProps {
     scenes: Scene[];
     assets: GeneratedAssets;
@@ -33,6 +81,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     const [statusMessage, setStatusMessage] = useState("Initializing Pipeline...");
     const [progress, setProgress] = useState(0);
     const [finalUrl, setFinalUrl] = useState<string | null>(null);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     let width = resolution === Resolution.FHD ? 1920 : 1280;
     let height = resolution === Resolution.FHD ? 1080 : 720;
@@ -99,7 +148,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     };
 
     const applyMasteringEffects = (ctx: CanvasRenderingContext2D, w: number, h: number, elapsed: number) => {
-        // Subtle Lens Flare
+        // Subtle Lens Flare (always-on baseline ambient sparkle)
         if (Math.sin(elapsed / 2000) > 0.85) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
@@ -114,8 +163,60 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             ctx.restore();
         }
 
+        // Bloom: bright-pass approximation via additive soft radial highlights
+        const bloom = (mastering?.bloomIntensity ?? 0) / 100;
+        if (bloom > 0) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = bloom * 0.6;
+            const cx = w / 2;
+            const cy = h / 2;
+            const r = Math.max(w, h) * 0.6;
+            const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+            g.addColorStop(0, 'rgba(255,240,210,0.35)');
+            g.addColorStop(0.4, 'rgba(255,220,180,0.10)');
+            g.addColorStop(1, 'transparent');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, w, h);
+            ctx.restore();
+        }
+
+        // Light leak: warm edge gradient that drifts over time
+        const leak = (mastering?.lightLeakIntensity ?? 0) / 100;
+        if (leak > 0) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            const drift = (Math.sin(elapsed / 5000) + 1) / 2;
+            const lx = drift * w;
+            const ly = (1 - drift) * h;
+            const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, Math.max(w, h) * 0.8);
+            g.addColorStop(0, `rgba(255, 150, 80, ${leak * 0.55})`);
+            g.addColorStop(0.3, `rgba(255, 100, 50, ${leak * 0.20})`);
+            g.addColorStop(1, 'transparent');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, w, h);
+            ctx.restore();
+        }
+
+        // Film burn: sporadic high-intensity orange flare gated on intensity
+        const burn = (mastering?.filmBurnIntensity ?? 0) / 100;
+        if (burn > 0 && Math.random() < burn * 0.05) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            const bx = Math.random() * w;
+            const by = Math.random() * h;
+            const br = Math.random() * Math.max(w, h) * 0.3 + 80;
+            const g = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+            g.addColorStop(0, `rgba(255, 200, 100, ${0.6 * burn})`);
+            g.addColorStop(0.3, `rgba(255, 120, 40, ${0.3 * burn})`);
+            g.addColorStop(1, 'transparent');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, w, h);
+            ctx.restore();
+        }
+
         // Vignette
-        const vignette = (mastering?.vignetteIntensity || 30) / 100;
+        const vignette = (mastering?.vignetteIntensity ?? 30) / 100;
         if (vignette > 0) {
             ctx.save();
             const gradient = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.25, w / 2, h / 2, Math.max(w, h) * 0.75);
@@ -127,7 +228,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         }
 
         // Film Grain
-        const grain = mastering?.filmGrain || 5;
+        const grain = mastering?.filmGrain ?? 5;
         if (grain > 0 && Math.random() > 0.5) {
             ctx.save();
             ctx.globalAlpha = grain / 200;
@@ -192,21 +293,40 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         let isCancelled = false;
         let audioCtx: AudioContext | null = null;
         const chunks: Blob[] = [];
+        // Track audio buffer sources so we can stop them at scene boundaries
+        // — otherwise long TTS bleeds into the next scene.
+        const activeSources: AudioBufferSourceNode[] = [];
+        let bgMusicSource: AudioBufferSourceNode | null = null;
+        let bgMusicGain: GainNode | null = null;
+        let currentMusicMood: string | null = null;
 
         const startRendering = async () => {
             if (!canvasRef.current) return;
-            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
+
+            const mimeType = pickMimeType();
+            if (!mimeType) {
+                setRenderState('error');
+                setErrorMsg('Your browser does not support any compatible video codec for recording.');
+                return;
+            }
+
+            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d', { alpha: false })!;
-            const stream = canvas.captureStream(30);
+            const stream = canvas.captureStream(TARGET_FPS);
             const destNode = audioCtx.createMediaStreamDestination();
             const tracks = [...stream.getVideoTracks(), ...destNode.stream.getAudioTracks()];
             const combinedStream = new MediaStream(tracks);
 
-            const recorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 25000000 });
+            bgMusicGain = audioCtx.createGain();
+            bgMusicGain.gain.value = (mastering?.musicVolume ?? 15) / 100;
+            bgMusicGain.connect(destNode);
+
+            const bitrate = computeBitrate(width, height, TARGET_FPS);
+            const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: bitrate });
             recorder.ondataavailable = e => chunks.push(e.data);
             recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'video/webm' });
+                const blob = new Blob(chunks, { type: mimeType });
                 const url = URL.createObjectURL(blob);
                 setFinalUrl(url);
                 setRenderState('complete');
@@ -224,61 +344,143 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 setStatusMessage(`Manifesting Sequence ${i + 1}/${scenes.length}`);
                 setProgress((i / scenes.length) * 100);
 
-                const duration = (scene.estimatedDuration || 5) * 1000;
-                const startTime = Date.now();
+                const durationSec = scene.estimatedDuration || 5;
+                const durationMs = durationSec * 1000;
+                const sceneStart = performance.now();
 
-                // TTS mixing
-                if (asset?.audioUrl) {
-                    const buffer = await decodeAudio(asset.audioUrl.split(',')[1], audioCtx);
-                    const source = audioCtx.createBufferSource();
-                    const gain = audioCtx.createGain();
-                    gain.gain.value = (mastering?.voiceVolume ?? 100) / 100;
-                    source.connect(gain);
-                    gain.connect(destNode);
-                    source.buffer = buffer;
-                    source.start(0);
+                // Music track (per-scene mood)
+                if (scene.musicMood && scene.musicMood !== currentMusicMood) {
+                    if (bgMusicSource) {
+                        try { bgMusicSource.stop(); } catch (e) { /* already stopped */ }
+                    }
+                    const url = (MUSIC_TRACKS as any)[scene.musicMood];
+                    if (url && audioCtx) {
+                        try {
+                            const resp = await fetch(url);
+                            const ab = await resp.arrayBuffer();
+                            const buf = await audioCtx.decodeAudioData(ab);
+                            const src = audioCtx.createBufferSource();
+                            src.buffer = buf;
+                            src.loop = true;
+                            src.connect(bgMusicGain!);
+                            src.start(0);
+                            bgMusicSource = src;
+                            currentMusicMood = scene.musicMood;
+                        } catch (e) {
+                            console.error('Music track failed:', e);
+                        }
+                    }
                 }
 
+                // TTS narration — bounded to scene duration to prevent cross-scene bleed
+                if (asset?.audioUrl && audioCtx) {
+                    try {
+                        const audioBase64 = asset.audioUrl.includes(',') ? asset.audioUrl.split(',')[1] : asset.audioUrl;
+                        const buffer = await decodeAudio(audioBase64, audioCtx);
+                        const source = audioCtx.createBufferSource();
+                        const gain = audioCtx.createGain();
+                        gain.gain.value = (mastering?.voiceVolume ?? 100) / 100;
+                        source.connect(gain);
+                        gain.connect(destNode);
+                        source.buffer = buffer;
+                        source.start(0, 0, durationSec);
+                        activeSources.push(source);
+                    } catch (e) {
+                        console.error('TTS decode failed:', e);
+                    }
+                }
+
+                // Media asset load with timeout
                 let media: HTMLVideoElement | HTMLImageElement | null = null;
-                if (asset?.videoUrl) {
-                    media = document.createElement('video');
-                    media.src = asset.videoUrl;
-                    media.muted = true;
-                    media.loop = true;
-                    await media.play();
-                } else if (asset?.imageUrl) {
-                    media = new Image();
-                    media.src = asset.imageUrl;
-                    await new Promise(r => media!.onload = r);
+                try {
+                    if (asset?.videoUrl) {
+                        const v = document.createElement('video');
+                        v.muted = true;
+                        v.loop = true;
+                        v.playsInline = true;
+                        await loadMedia(v, asset.videoUrl, MEDIA_LOAD_TIMEOUT_MS);
+                        await v.play().catch(() => { /* autoplay may be blocked, still draws frames */ });
+                        media = v;
+                    } else if (asset?.imageUrl) {
+                        const img = new Image();
+                        await loadMedia(img, asset.imageUrl, MEDIA_LOAD_TIMEOUT_MS);
+                        media = img;
+                    }
+                } catch (e) {
+                    console.warn(`Scene ${i} media load failed, falling back to black frame:`, e);
+                    media = null;
                 }
 
-                while (Date.now() - startTime < duration) {
+                // Fixed-step frame pacer — true 30 fps regardless of hardware
+                let frameIndex = 0;
+                let lateFrames = 0;
+                while (true) {
                     if (isCancelled) break;
-                    const elapsed = Date.now() - startTime;
-                    const p = elapsed / duration;
+                    const targetTime = sceneStart + frameIndex * FRAME_INTERVAL_MS;
+                    const now = performance.now();
+                    if (now - sceneStart >= durationMs) break;
+
+                    if (now < targetTime) {
+                        await sleep(targetTime - now);
+                    } else if (now - targetTime > FRAME_INTERVAL_MS) {
+                        lateFrames++;
+                    }
+
+                    const elapsed = performance.now() - sceneStart;
+                    const p = Math.min(elapsed / durationMs, 1);
                     ctx.fillStyle = '#000';
                     ctx.fillRect(0, 0, width, height);
                     if (media) {
                         drawMediaFrame(ctx, media, width, height, p, scene, lastMedia);
-                        applyMasteringEffects(ctx, width, height, elapsed);
-                        if (scene.textOverlay) {
-                            drawOverlayText(ctx, scene.textOverlay, width, height, p);
-                        }
                     }
-                    await new Promise(r => requestAnimationFrame(r));
+                    applyMasteringEffects(ctx, width, height, elapsed);
+                    if (scene.textOverlay) {
+                        drawOverlayText(ctx, scene.textOverlay, width, height, p);
+                    }
+                    frameIndex++;
+                }
+                if (lateFrames > frameIndex * 0.05) {
+                    console.warn(`Scene ${i}: ${lateFrames}/${frameIndex} frames missed frame budget`);
+                }
+
+                // Stop scene-local audio sources so they don't bleed into the next scene
+                for (const s of activeSources.splice(0)) {
+                    try { s.stop(); } catch (e) { /* already stopped */ }
                 }
                 lastMedia = media;
+            }
+            if (bgMusicSource) {
+                try { bgMusicSource.stop(); } catch (e) { /* already stopped */ }
             }
             recorder.stop();
         };
 
-        startRendering();
-        return () => { isCancelled = true; if (audioCtx) audioCtx.close(); };
-    }, [scenes, assets, cinematicProfile]);
+        startRendering().catch(e => {
+            console.error('Render failed:', e);
+            setRenderState('error');
+            setErrorMsg(e?.message || 'Render failed');
+        });
+
+        return () => {
+            isCancelled = true;
+            for (const s of activeSources) { try { s.stop(); } catch (e) { /* already stopped */ } }
+            if (bgMusicSource) { try { bgMusicSource.stop(); } catch (e) { /* already stopped */ } }
+            if (audioCtx) audioCtx.close();
+        };
+    }, [scenes, assets, cinematicProfile, mastering]);
 
     return (
         <div className="fixed inset-0 bg-eclipse-black/98 flex flex-col items-center justify-center z-[500] backdrop-blur-3xl p-6">
-            {renderState === 'complete' ? (
+            {renderState === 'error' ? (
+                <div className="w-full max-w-2xl text-center p-12 glass-panel rounded-[3rem] border-red-500/30 animate-in zoom-in-95 duration-700">
+                    <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-10 text-red-400 text-4xl shadow-lg border border-red-500/30">
+                        <i className="fa-solid fa-triangle-exclamation"></i>
+                    </div>
+                    <h2 className="text-4xl font-bold text-white mb-4 uppercase font-mono italic">Render Halted</h2>
+                    <p className="text-mystic-gray mb-12 text-sm">{errorMsg}</p>
+                    <button onClick={onCancel} className="text-mystic-gray hover:text-white uppercase tracking-widest text-[9px] font-black py-4">Close Synthesis Lab</button>
+                </div>
+            ) : renderState === 'complete' ? (
                 <div className="w-full max-w-2xl text-center p-12 glass-panel rounded-[3rem] border-white/10 animate-in zoom-in-95 duration-700">
                     <div className="w-20 h-20 bg-deep-sage/10 rounded-full flex items-center justify-center mx-auto mb-10 text-deep-sage text-4xl shadow-lg border border-deep-sage/20">
                         <i className="fa-solid fa-check"></i>

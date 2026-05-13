@@ -45,7 +45,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
             </span>
           </button>
           
-          <button className="px-10 py-6 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.2em] text-xs hover:bg-white/5 transition-all flex items-center gap-4 border border-white/5">
+          <button onClick={() => { document.querySelector('section:nth-of-type(2)')?.scrollIntoView({ behavior: 'smooth' }); }} className="px-10 py-6 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.2em] text-xs hover:bg-white/5 transition-all flex items-center gap-4 border border-white/5">
             <i className="fa-solid fa-play text-luna-gold"></i> View Technical Showcase
           </button>
         </div>
@@ -114,7 +114,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart }) => {
             <div className="w-full lg:w-[450px] aspect-square relative">
                <div className="absolute inset-0 bg-solar-amber/10 rounded-full blur-[100px] animate-pulse"></div>
                <div className="nm-panel w-full h-full rounded-full border border-solar-amber/20 flex items-center justify-center relative overflow-hidden group/bot">
-                  <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-20"></div>
+                  <div className="absolute inset-0 bg-[url('/textures/carbon-fibre.png')] opacity-20"></div>
                   <div className="relative z-10 w-32 h-32 nm-button rounded-full flex items-center justify-center text-solar-amber shadow-[0_0_50px_rgba(239,68,68,0.2)] group-hover/bot:scale-110 transition-transform duration-700">
                      <i className="fa-solid fa-brain text-5xl"></i>
                   </div>

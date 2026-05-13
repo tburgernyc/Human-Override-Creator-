@@ -103,7 +103,7 @@ export const Layout: React.FC<LayoutProps> = ({
       
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative pt-24">
         {/* Background Effects */}
-        <div className="fixed inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03] pointer-events-none -z-20"></div>
+        <div className="fixed inset-0 bg-[url('/textures/noise.svg')] opacity-[0.03] pointer-events-none -z-20"></div>
         <div className="fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:60px_60px] pointer-events-none -z-20"></div>
         
         <div className="min-h-screen">
@@ -119,9 +119,9 @@ export const Layout: React.FC<LayoutProps> = ({
                <span className="text-xs text-mystic-gray font-mono uppercase tracking-[0.3em]">Human Override Production Unit © 2025</span>
             </div>
             <div className="flex gap-10">
-               <a href="#" className="text-[10px] text-mystic-gray hover:text-luna-gold font-bold uppercase tracking-widest transition-colors">Documentation</a>
-               <a href="#" className="text-[10px] text-mystic-gray hover:text-luna-gold font-bold uppercase tracking-widest transition-colors">API Status</a>
-               <a href="#" className="text-[10px] text-mystic-gray hover:text-luna-gold font-bold uppercase tracking-widest transition-colors">Support</a>
+               <a href="#" onClick={(e) => e.preventDefault()} title="Coming soon" className="text-[10px] text-mystic-gray hover:text-luna-gold font-bold uppercase tracking-widest transition-colors">Documentation</a>
+               <a href="#" onClick={(e) => e.preventDefault()} title="Coming soon" className="text-[10px] text-mystic-gray hover:text-luna-gold font-bold uppercase tracking-widest transition-colors">API Status</a>
+               <a href="#" onClick={(e) => e.preventDefault()} title="Coming soon" className="text-[10px] text-mystic-gray hover:text-luna-gold font-bold uppercase tracking-widest transition-colors">Support</a>
             </div>
           </div>
         </div>

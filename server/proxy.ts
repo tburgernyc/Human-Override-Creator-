@@ -25,7 +25,8 @@ app.get('/api/health', (_req, res) => {
 // Proxy all Gemini API requests — the key is injected server-side
 app.all('/api/gemini/*', async (req, res) => {
     try {
-        const targetPath = (req.params as any)[0];
+        // Use req.path instead of req.params to be compatible with Express 4 & 5 wildcard semantics.
+        const targetPath = req.path.slice('/api/gemini/'.length);
         const baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
         const url = new URL(`${baseUrl}/${targetPath}`);
         url.searchParams.set('key', GEMINI_API_KEY!);
@@ -53,6 +54,28 @@ app.all('/api/gemini/*', async (req, res) => {
     } catch (error: any) {
         console.error('Proxy error:', error.message);
         res.status(500).json({ error: 'Proxy request failed', details: error.message });
+    }
+});
+
+// Secure video/file download endpoint — injects API key server-side so the client never holds it.
+// The URI allowlist prevents this from acting as an open proxy.
+app.get('/api/download', async (req, res) => {
+    const uri = req.query.uri as string;
+    if (!uri || !uri.startsWith('https://generativelanguage.googleapis.com/')) {
+        return res.status(400).json({ error: 'Invalid or missing URI' });
+    }
+    try {
+        const url = new URL(uri);
+        url.searchParams.set('key', GEMINI_API_KEY!);
+        const response = await fetch(url.toString());
+        res.status(response.status);
+        const contentType = response.headers.get('Content-Type');
+        if (contentType) res.setHeader('Content-Type', contentType);
+        const buffer = await response.arrayBuffer();
+        res.send(Buffer.from(buffer));
+    } catch (error: any) {
+        console.error('Download proxy error:', error.message);
+        res.status(500).json({ error: 'Download proxy failed', details: error.message });
     }
 });
 

@@ -6,7 +6,7 @@ interface AssetLibraryProps {
   assets: GeneratedAssets;
   scenes: Scene[];
   onClose: () => void;
-  onSelect: (sceneId: number) => void;
+  onSelect: (sceneId: string) => void;
 }
 
 export const AssetLibrary: React.FC<AssetLibraryProps> = ({ assets, scenes, onClose, onSelect }) => {

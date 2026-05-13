@@ -9,9 +9,9 @@ interface BRollSuggestionModalProps {
 }
 
 export const BRollSuggestionModal: React.FC<BRollSuggestionModalProps> = ({ suggestions, onAccept, onClose }) => {
-  const [selectedIds, setSelectedIds] = useState<number[]>(suggestions.map(s => s.id));
+  const [selectedIds, setSelectedIds] = useState<string[]>(suggestions.map(s => s.id));
 
-  const toggleSelect = (id: number) => {
+  const toggleSelect = (id: string) => {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
