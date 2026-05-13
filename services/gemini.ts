@@ -484,7 +484,14 @@ export const generateSceneImage = async (scene: Scene, characters: Character[], 
   return `data:image/png;base64,${data}`;
 };
 
-export const generateSceneVideo = async (imageBase64: string, prompt: string, aspectRatio: AspectRatio, resolution: Resolution, style: string = "Cinematic"): Promise<string> => {
+export interface SceneVideoResult {
+  /** Base64 data URI for inline playback in the browser. */
+  videoUrl: string;
+  /** Remote Veo URI of the original operation output — required for extendSceneVideo. */
+  videoUri: string;
+}
+
+export const generateSceneVideo = async (imageBase64: string, prompt: string, aspectRatio: AspectRatio, resolution: Resolution, style: string = "Cinematic"): Promise<SceneVideoResult> => {
   const ai = getAIClient();
   let operation: any = await ai.models.generateVideos({
     model: resolution === Resolution.FHD ? MODEL_NAMES.VIDEO : MODEL_NAMES.VIDEO_FAST,
@@ -509,12 +516,19 @@ export const generateSceneVideo = async (imageBase64: string, prompt: string, as
   if (!videoUri) throw new Error('Video generation completed but returned no video URI.');
   // Route download through the proxy so the API key is never in the client
   const blob = await (await fetch(`/api/download?uri=${encodeURIComponent(videoUri)}`)).blob();
-  return await blobToBase64(blob);
+  const videoUrl = await blobToBase64(blob);
+  return { videoUrl, videoUri };
 };
 
-export const extendSceneVideo = async (prevVideoUri: string, prompt: string, aspectRatio: AspectRatio): Promise<string> => {
+// Extends a previously generated Veo video. The input MUST be the remote URI
+// emitted by a prior generateSceneVideo call (operation.response.generatedVideos[0].video.uri)
+// — passing a base64 data URL here fails server-side. See SceneVideoResult.
+export const extendSceneVideo = async (prevVideoUri: string, prompt: string, aspectRatio: AspectRatio): Promise<SceneVideoResult> => {
+  if (!prevVideoUri || prevVideoUri.startsWith('data:')) {
+    throw new Error('extendSceneVideo requires the remote Veo URI from the original operation, not a base64 data URL.');
+  }
   const ai = getAIClient();
-  // Only 720p videos can be extended currently according to guidelines
+  // Only 720p videos can be extended currently according to Veo guidelines
   let operation: any = await ai.models.generateVideos({
     model: 'veo-3.1-generate-preview',
     prompt: `Continue the scene: ${prompt}`,
@@ -540,7 +554,8 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
   const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
   if (!videoUri) throw new Error('Video extension completed but returned no video URI.');
   const blob = await (await fetch(`/api/download?uri=${encodeURIComponent(videoUri)}`)).blob();
-  return await blobToBase64(blob);
+  const videoUrl = await blobToBase64(blob);
+  return { videoUrl, videoUri };
 };
 
 export const generateSceneAudio = async (lines: DialogueLine[], characters: Character[]): Promise<string> => {

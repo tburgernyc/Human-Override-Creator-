@@ -106,6 +106,10 @@ export interface GeneratedAssets {
   [sceneId: string]: {
     imageUrl?: string;
     videoUrl?: string;
+    // Remote Veo URI for the same video — kept alongside the base64 videoUrl so
+    // extendSceneVideo can reference the original operation output (the extend
+    // endpoint rejects base64 data URIs).
+    videoUri?: string;
     audioUrl?: string;
     status: 'pending' | 'generating_image' | 'generating_video' | 'generating_audio' | 'validating' | 'complete' | 'error';
     variants: AssetHistoryItem[];

@@ -362,8 +362,8 @@ const App: React.FC = () => {
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: 'generating_video' } } }));
 
       // Phase 2: Video — fatal if fails
-      const video = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
-      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl: video, status: 'generating_audio' } } }));
+      const { videoUrl, videoUri } = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
+      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl, videoUri, status: 'generating_audio' } } }));
 
       // Phase 3: Audio — non-fatal; visual assets are preserved if this fails
       let audio: string | undefined;
@@ -373,7 +373,7 @@ const App: React.FC = () => {
         addLog(`Audio synthesis failed for Scene #${sceneId} — visual assets preserved.`, 'error');
       }
 
-      const finalVariant: AssetHistoryItem = { imageUrl: img, videoUrl: video, timestamp: Date.now() };
+      const finalVariant: AssetHistoryItem = { imageUrl: img, videoUrl, timestamp: Date.now() };
 
       setProject(prev => {
         const currentAsset = prev.assets[sceneId];
@@ -384,7 +384,8 @@ const App: React.FC = () => {
             [sceneId]: {
               ...currentAsset,
               imageUrl: img,
-              videoUrl: video,
+              videoUrl,
+              videoUri,
               audioUrl: audio,
               status: 'complete',
               variants: [finalVariant, ...(currentAsset?.variants || [])].slice(0, 5)
@@ -402,6 +403,10 @@ const App: React.FC = () => {
     const scene = project.scenes.find(s => s.id === sceneId);
     const asset = project.assets[sceneId];
     if (!scene || !asset?.videoUrl) return;
+    if (!asset.videoUri) {
+      addLog(`Cannot extend Scene #${project.scenes.indexOf(scene) + 1}: the original Veo URI is missing (regenerate the scene first to enable extension).`, "error");
+      return;
+    }
 
     addLog(`Extending temporal sequence for Scene #${project.scenes.indexOf(scene) + 1}`, "system");
     setProject(prev => ({
@@ -413,18 +418,19 @@ const App: React.FC = () => {
     }));
 
     try {
-      const extendedVideo = await extendSceneVideo(asset.videoUrl, scene.visualPrompt, aspectRatio);
+      const { videoUrl: extendedVideoUrl, videoUri: extendedVideoUri } = await extendSceneVideo(asset.videoUri, scene.visualPrompt, aspectRatio);
       setProject(prev => ({
         ...prev,
         scenes: prev.scenes.map(s => s.id === sceneId ? { ...s, estimatedDuration: (s.estimatedDuration || 5) + 7 } : s),
         assets: {
           ...prev.assets,
-          [sceneId]: { ...asset, videoUrl: extendedVideo, status: 'complete' }
+          [sceneId]: { ...asset, videoUrl: extendedVideoUrl, videoUri: extendedVideoUri, status: 'complete' }
         }
       }));
       addLog(`Extended scene sequence complete (+7s).`, "success");
     } catch (e) {
-      addLog(`Extension failure for Scene #${sceneId}.`, "error");
+      const msg = e instanceof Error ? e.message : 'extension failed';
+      addLog(`Extension failure for Scene #${sceneId}: ${msg}`, "error");
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...asset, status: 'complete' } } }));
     }
   };

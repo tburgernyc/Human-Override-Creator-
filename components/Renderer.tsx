@@ -85,6 +85,28 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
     const [etaSec, setEtaSec] = useState<number | null>(null);
 
+    // Refs let mid-render slider changes update visual effects on the next frame
+    // without restarting the whole render. Audio gain nodes are also live-updated
+    // via separate refs that the gain plumbing reads on each frame.
+    const masteringRef = useRef(mastering);
+    const cinematicProfileRef = useRef(cinematicProfile);
+    const bgMusicGainRef = useRef<GainNode | null>(null);
+    const voiceGainRefs = useRef<Set<GainNode>>(new Set());
+    useEffect(() => { masteringRef.current = mastering; }, [mastering]);
+    useEffect(() => { cinematicProfileRef.current = cinematicProfile; }, [cinematicProfile]);
+    // Live-apply music volume changes during a render. The bg music gain is the
+    // sidechain target — multiplying by the duck factor would require knowing
+    // whether TTS is currently active, so we just refresh the base value here.
+    useEffect(() => {
+        const g = bgMusicGainRef.current;
+        if (!g) return;
+        try { g.gain.cancelScheduledValues(0); g.gain.setValueAtTime((mastering?.musicVolume ?? 15) / 100, 0); } catch (e) { /* node detached */ }
+    }, [mastering?.musicVolume]);
+    useEffect(() => {
+        const v = (mastering?.voiceVolume ?? 100) / 100;
+        voiceGainRefs.current.forEach(g => { try { g.gain.setValueAtTime(v, 0); } catch (e) { /* node detached */ } });
+    }, [mastering?.voiceVolume]);
+
     let width = resolution === Resolution.FHD ? 1920 : 1280;
     let height = resolution === Resolution.FHD ? 1080 : 720;
 
@@ -92,6 +114,8 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     else if (aspectRatio === AspectRatio.SQUARE) width = height = resolution === Resolution.FHD ? 1080 : 720;
 
     const applyGrading = (ctx: CanvasRenderingContext2D, grade?: ColorGrade) => {
+        const liveCinematic = cinematicProfileRef.current ?? 'natural';
+        const liveMastering = masteringRef.current;
         let filters = [];
         if (grade) {
             filters.push(`contrast(${grade.contrast || 100}%)`);
@@ -101,15 +125,15 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             filters.push(`brightness(${100 + (grade.exposure || 0)}%)`);
         }
 
-        if (cinematicProfile === 'dreamy') filters.push('sepia(20%) brightness(110%) blur(0.5px)');
-        if (cinematicProfile === 'high_contrast') filters.push('contrast(140%) saturate(130%)');
-        if (cinematicProfile === 'vintage') filters.push('sepia(35%) contrast(90%) brightness(95%)');
-        if (cinematicProfile === 'noir') filters.push('grayscale(100%) contrast(150%)');
+        if (liveCinematic === 'dreamy') filters.push('sepia(20%) brightness(110%) blur(0.5px)');
+        if (liveCinematic === 'high_contrast') filters.push('contrast(140%) saturate(130%)');
+        if (liveCinematic === 'vintage') filters.push('sepia(35%) contrast(90%) brightness(95%)');
+        if (liveCinematic === 'noir') filters.push('grayscale(100%) contrast(150%)');
 
         // LUT Preset simulations
-        if (mastering?.lutPreset === 'kodak_5219') filters.push('contrast(110%) saturate(105%) sepia(5%)');
-        if (mastering?.lutPreset === 'noir') filters.push('grayscale(100%) contrast(120%)');
-        if (mastering?.lutPreset === 'technicolor') filters.push('saturate(180%) contrast(110%)');
+        if (liveMastering?.lutPreset === 'kodak_5219') filters.push('contrast(110%) saturate(105%) sepia(5%)');
+        if (liveMastering?.lutPreset === 'noir') filters.push('grayscale(100%) contrast(120%)');
+        if (liveMastering?.lutPreset === 'technicolor') filters.push('saturate(180%) contrast(110%)');
 
         ctx.filter = filters.join(' ') || 'none';
     };
@@ -150,6 +174,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     };
 
     const applyMasteringEffects = (ctx: CanvasRenderingContext2D, w: number, h: number, elapsed: number) => {
+        const liveMastering = masteringRef.current;
         // Subtle Lens Flare (always-on baseline ambient sparkle)
         if (Math.sin(elapsed / 2000) > 0.85) {
             ctx.save();
@@ -166,7 +191,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         }
 
         // Bloom: bright-pass approximation via additive soft radial highlights
-        const bloom = (mastering?.bloomIntensity ?? 0) / 100;
+        const bloom = (liveMastering?.bloomIntensity ?? 0) / 100;
         if (bloom > 0) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
@@ -184,7 +209,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         }
 
         // Light leak: warm edge gradient that drifts over time
-        const leak = (mastering?.lightLeakIntensity ?? 0) / 100;
+        const leak = (liveMastering?.lightLeakIntensity ?? 0) / 100;
         if (leak > 0) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
@@ -201,7 +226,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         }
 
         // Film burn: sporadic high-intensity orange flare gated on intensity
-        const burn = (mastering?.filmBurnIntensity ?? 0) / 100;
+        const burn = (liveMastering?.filmBurnIntensity ?? 0) / 100;
         if (burn > 0 && Math.random() < burn * 0.05) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
@@ -218,7 +243,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         }
 
         // Vignette
-        const vignette = (mastering?.vignetteIntensity ?? 30) / 100;
+        const vignette = (liveMastering?.vignetteIntensity ?? 30) / 100;
         if (vignette > 0) {
             ctx.save();
             const gradient = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.25, w / 2, h / 2, Math.max(w, h) * 0.75);
@@ -230,7 +255,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         }
 
         // Film Grain
-        const grain = mastering?.filmGrain ?? 5;
+        const grain = liveMastering?.filmGrain ?? 5;
         if (grain > 0 && Math.random() > 0.5) {
             ctx.save();
             ctx.globalAlpha = grain / 200;
@@ -298,9 +323,16 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         // Track audio buffer sources so we can stop them at scene boundaries
         // — otherwise long TTS bleeds into the next scene.
         const activeSources: AudioBufferSourceNode[] = [];
-        let bgMusicSource: AudioBufferSourceNode | null = null;
+        // Decoded music buffers cached by mood key so a mood that repeats does
+        // not re-download and re-decode the same track.
+        const musicBufferCache = new Map<string, AudioBuffer>();
+        // Currently-playing music source plus its dedicated crossfade gain node
+        // (per-track), letting two tracks overlap during a transition. The shared
+        // bgMusicGain handles overall volume + sidechain ducking.
+        let activeMusic: { source: AudioBufferSourceNode; crossfadeGain: GainNode } | null = null;
         let bgMusicGain: GainNode | null = null;
         let currentMusicMood: string | null = null;
+        const MUSIC_CROSSFADE_SEC = 1.0;
 
         const startRendering = async () => {
             if (!canvasRef.current) return;
@@ -320,9 +352,24 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             const tracks = [...stream.getVideoTracks(), ...destNode.stream.getAudioTracks()];
             const combinedStream = new MediaStream(tracks);
 
+            // Master compressor sits between all audio sources and the recorded
+            // output. Prevents clipping when TTS + music + ambient stack up and
+            // keeps overall loudness more consistent across scenes.
+            const masterCompressor = audioCtx.createDynamicsCompressor();
+            masterCompressor.threshold.value = -8;   // start compressing 8 dB below peak
+            masterCompressor.knee.value = 6;
+            masterCompressor.ratio.value = 4;
+            masterCompressor.attack.value = 0.005;   // 5 ms — fast enough to catch transients
+            masterCompressor.release.value = 0.1;    // 100 ms — smooth recovery
+            masterCompressor.connect(destNode);
+
+            const normalMusicGainValue = (mastering?.musicVolume ?? 15) / 100;
+            // Bg music ducks to 30% of its normal level while TTS plays.
+            const duckedMusicGainValue = normalMusicGainValue * 0.3;
             bgMusicGain = audioCtx.createGain();
-            bgMusicGain.gain.value = (mastering?.musicVolume ?? 15) / 100;
-            bgMusicGain.connect(destNode);
+            bgMusicGain.gain.value = normalMusicGainValue;
+            bgMusicGain.connect(masterCompressor);
+            bgMusicGainRef.current = bgMusicGain;
 
             const bitrate = computeBitrate(width, height, TARGET_FPS);
             const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: bitrate });
@@ -355,27 +402,63 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 }
                 const sceneWallStart = performance.now();
 
-                const durationSec = scene.estimatedDuration || 5;
+                // Pre-decode TTS so we can extend the scene to hold the full line
+                // instead of truncating dialogue mid-sentence. This is the central
+                // audio-quality fix from the audit: previously source.start(0, 0,
+                // durationSec) cut off any audio longer than the planned scene length.
+                let audioBuffer: AudioBuffer | null = null;
+                if (asset?.audioUrl && audioCtx) {
+                    try {
+                        const audioBase64 = asset.audioUrl.includes(',') ? asset.audioUrl.split(',')[1] : asset.audioUrl;
+                        audioBuffer = await decodeAudio(audioBase64, audioCtx);
+                    } catch (e) {
+                        console.error('TTS decode failed:', e);
+                    }
+                }
+
+                const baseDurationSec = scene.estimatedDuration || 5;
+                const AUDIO_TAIL_SEC = 0.4; // small breath after the line finishes
+                const audioDurationSec = audioBuffer ? audioBuffer.duration : 0;
+                const durationSec = Math.max(baseDurationSec, audioDurationSec + AUDIO_TAIL_SEC);
                 const durationMs = durationSec * 1000;
                 const sceneStart = performance.now();
 
-                // Music track (per-scene mood)
-                if (scene.musicMood && scene.musicMood !== currentMusicMood) {
-                    if (bgMusicSource) {
-                        try { bgMusicSource.stop(); } catch (e) { /* already stopped */ }
-                    }
+                // Music track (per-scene mood) — fade between tracks instead of hard-cutting.
+                if (scene.musicMood && scene.musicMood !== currentMusicMood && audioCtx && bgMusicGain) {
                     const url = (MUSIC_TRACKS as any)[scene.musicMood];
-                    if (url && audioCtx) {
+                    if (url) {
                         try {
-                            const resp = await fetch(url);
-                            const ab = await resp.arrayBuffer();
-                            const buf = await audioCtx.decodeAudioData(ab);
-                            const src = audioCtx.createBufferSource();
-                            src.buffer = buf;
-                            src.loop = true;
-                            src.connect(bgMusicGain!);
-                            src.start(0);
-                            bgMusicSource = src;
+                            let buf = musicBufferCache.get(scene.musicMood);
+                            if (!buf) {
+                                const resp = await fetch(url);
+                                const ab = await resp.arrayBuffer();
+                                buf = await audioCtx.decodeAudioData(ab);
+                                musicBufferCache.set(scene.musicMood, buf);
+                            }
+
+                            const now = audioCtx.currentTime;
+
+                            // Fade out the currently-playing track, then stop it after the fade tail.
+                            if (activeMusic) {
+                                const { source: oldSrc, crossfadeGain: oldGain } = activeMusic;
+                                oldGain.gain.cancelScheduledValues(now);
+                                oldGain.gain.setValueAtTime(oldGain.gain.value, now);
+                                oldGain.gain.linearRampToValueAtTime(0, now + MUSIC_CROSSFADE_SEC);
+                                setTimeout(() => { try { oldSrc.stop(); } catch (e) { /* already stopped */ } }, (MUSIC_CROSSFADE_SEC + 0.05) * 1000);
+                            }
+
+                            // Fade in the new track from silent up to full crossfade gain.
+                            const newGain = audioCtx.createGain();
+                            newGain.gain.value = 0;
+                            newGain.connect(bgMusicGain);
+                            const newSrc = audioCtx.createBufferSource();
+                            newSrc.buffer = buf;
+                            newSrc.loop = true;
+                            newSrc.connect(newGain);
+                            newSrc.start(0);
+                            newGain.gain.linearRampToValueAtTime(1, now + MUSIC_CROSSFADE_SEC);
+
+                            activeMusic = { source: newSrc, crossfadeGain: newGain };
                             currentMusicMood = scene.musicMood;
                         } catch (e) {
                             console.error('Music track failed:', e);
@@ -383,21 +466,31 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     }
                 }
 
-                // TTS narration — bounded to scene duration to prevent cross-scene bleed
-                if (asset?.audioUrl && audioCtx) {
-                    try {
-                        const audioBase64 = asset.audioUrl.includes(',') ? asset.audioUrl.split(',')[1] : asset.audioUrl;
-                        const buffer = await decodeAudio(audioBase64, audioCtx);
-                        const source = audioCtx.createBufferSource();
-                        const gain = audioCtx.createGain();
-                        gain.gain.value = (mastering?.voiceVolume ?? 100) / 100;
-                        source.connect(gain);
-                        gain.connect(destNode);
-                        source.buffer = buffer;
-                        source.start(0, 0, durationSec);
-                        activeSources.push(source);
-                    } catch (e) {
-                        console.error('TTS decode failed:', e);
+                // Start the pre-decoded TTS buffer at full length — the scene
+                // duration was already extended above to accommodate it.
+                if (audioBuffer && audioCtx) {
+                    const source = audioCtx.createBufferSource();
+                    const gain = audioCtx.createGain();
+                    gain.gain.value = (masteringRef.current?.voiceVolume ?? 100) / 100;
+                    source.connect(gain);
+                    gain.connect(masterCompressor);
+                    source.buffer = audioBuffer;
+                    source.start(0);
+                    activeSources.push(source);
+                    voiceGainRefs.current.add(gain);
+
+                    // Sidechain-style ducking: drop bg music while TTS plays, restore on end.
+                    if (bgMusicGain) {
+                        const now = audioCtx.currentTime;
+                        bgMusicGain.gain.cancelScheduledValues(now);
+                        bgMusicGain.gain.linearRampToValueAtTime(duckedMusicGainValue, now + 0.15);
+                        source.onended = () => {
+                            voiceGainRefs.current.delete(gain);
+                            if (!audioCtx || !bgMusicGain) return;
+                            const t = audioCtx.currentTime;
+                            bgMusicGain.gain.cancelScheduledValues(t);
+                            bgMusicGain.gain.linearRampToValueAtTime((masteringRef.current?.musicVolume ?? 15) / 100, t + 0.4);
+                        };
                     }
                 }
 
@@ -458,13 +551,31 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 for (const s of activeSources.splice(0)) {
                     try { s.stop(); } catch (e) { /* already stopped */ }
                 }
+
+                // Release the prior scene's media element — its transition use is
+                // complete and holding it pinned keeps the video element decoding
+                // in the background, bloating memory across long renders.
+                if (lastMedia && lastMedia !== media) {
+                    releaseMedia(lastMedia);
+                }
                 lastMedia = media;
                 sceneDurations.push(performance.now() - sceneWallStart);
             }
-            if (bgMusicSource) {
-                try { bgMusicSource.stop(); } catch (e) { /* already stopped */ }
+            // Final scene's media also needs releasing once the loop exits.
+            if (lastMedia) releaseMedia(lastMedia);
+            if (activeMusic) {
+                try { activeMusic.source.stop(); } catch (e) { /* already stopped */ }
+                activeMusic = null;
             }
             recorder.stop();
+        };
+
+        const releaseMedia = (m: HTMLVideoElement | HTMLImageElement) => {
+            if (m instanceof HTMLVideoElement) {
+                try { m.pause(); } catch (e) { /* already paused */ }
+                try { m.removeAttribute('src'); m.load(); } catch (e) { /* element detached */ }
+            }
+            // Images don't hold streaming resources; let the GC handle them.
         };
 
         startRendering().catch(e => {
@@ -476,10 +587,14 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         return () => {
             isCancelled = true;
             for (const s of activeSources) { try { s.stop(); } catch (e) { /* already stopped */ } }
-            if (bgMusicSource) { try { bgMusicSource.stop(); } catch (e) { /* already stopped */ } }
+            if (activeMusic) { try { activeMusic.source.stop(); } catch (e) { /* already stopped */ } }
             if (audioCtx) audioCtx.close();
         };
-    }, [scenes, assets, cinematicProfile, mastering]);
+    // Intentionally excludes mastering and cinematicProfile — those are read
+    // via refs so slider changes during a render apply on the next frame
+    // instead of cancelling-and-restarting the whole render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scenes, assets]);
 
     return (
         <div className="fixed inset-0 bg-eclipse-black/98 flex flex-col items-center justify-center z-[500] backdrop-blur-3xl p-6">
