@@ -7,9 +7,11 @@ interface ProductionMonitorProps {
   scenes: Scene[];
   assets: GeneratedAssets;
   currentTask?: string;
+  onCancel?: () => void;
+  isCancelling?: boolean;
 }
 
-export const ProductionMonitor: React.FC<ProductionMonitorProps> = ({ isActive, scenes, assets, currentTask }) => {
+export const ProductionMonitor: React.FC<ProductionMonitorProps> = ({ isActive, scenes, assets, currentTask, onCancel, isCancelling }) => {
   if (!isActive) return null;
 
   const totalScenes = scenes.length;
@@ -30,9 +32,21 @@ export const ProductionMonitor: React.FC<ProductionMonitorProps> = ({ isActive, 
               <p className="text-[8px] text-mystic-gray uppercase font-bold tracking-widest">{currentTask || 'Synchronizing Pipeline...'}</p>
             </div>
           </div>
-          <div className="text-right">
-            <span className="text-xs font-black text-luna-gold font-mono">{Math.floor(progress)}%</span>
-            <p className="text-[7px] text-mystic-gray uppercase font-bold tracking-widest">Global Lock</p>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <span className="text-xs font-black text-luna-gold font-mono">{Math.floor(progress)}%</span>
+              <p className="text-[7px] text-mystic-gray uppercase font-bold tracking-widest">Global Lock</p>
+            </div>
+            {onCancel && (
+              <button
+                onClick={onCancel}
+                disabled={isCancelling}
+                className="nm-button px-4 py-2 rounded-xl border border-red-400/30 text-red-300 hover:text-white hover:bg-red-400/10 transition-all text-[9px] font-black uppercase tracking-widest disabled:opacity-50"
+                aria-label="Cancel batch pipeline"
+              >
+                {isCancelling ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>Cancelling</> : <><i className="fa-solid fa-circle-stop mr-2"></i>Cancel</>}
+              </button>
+            )}
           </div>
         </div>
 

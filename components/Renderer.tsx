@@ -82,6 +82,8 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     const [progress, setProgress] = useState(0);
     const [finalUrl, setFinalUrl] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
+    const [etaSec, setEtaSec] = useState<number | null>(null);
 
     let width = resolution === Resolution.FHD ? 1920 : 1280;
     let height = resolution === Resolution.FHD ? 1080 : 720;
@@ -336,13 +338,22 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             setRenderState('rendering');
 
             let lastMedia: HTMLVideoElement | HTMLImageElement | null = null;
+            const sceneDurations: number[] = []; // wall-clock time per scene for ETA
 
             for (let i = 0; i < scenes.length; i++) {
                 if (isCancelled) break;
                 const scene = scenes[i];
                 const asset = assets[scene.id];
+                setCurrentSceneIdx(i);
                 setStatusMessage(`Manifesting Sequence ${i + 1}/${scenes.length}`);
                 setProgress((i / scenes.length) * 100);
+
+                // ETA: average elapsed-per-completed-scene × scenes remaining
+                if (sceneDurations.length > 0) {
+                    const avg = sceneDurations.reduce((a, b) => a + b, 0) / sceneDurations.length;
+                    setEtaSec(Math.ceil(avg * (scenes.length - i) / 1000));
+                }
+                const sceneWallStart = performance.now();
 
                 const durationSec = scene.estimatedDuration || 5;
                 const durationMs = durationSec * 1000;
@@ -448,6 +459,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     try { s.stop(); } catch (e) { /* already stopped */ }
                 }
                 lastMedia = media;
+                sceneDurations.push(performance.now() - sceneWallStart);
             }
             if (bgMusicSource) {
                 try { bgMusicSource.stop(); } catch (e) { /* already stopped */ }
@@ -493,24 +505,43 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     </div>
                 </div>
             ) : (
-                <div className="w-full max-w-3xl text-center p-16 glass-panel rounded-[4rem] border-white/5 relative overflow-hidden">
+                <div className="w-full max-w-4xl text-center p-10 sm:p-14 glass-panel rounded-[3rem] border-white/5 relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-full h-1 bg-white/5">
                         <div className="h-full bg-luna-gold transition-all duration-300" style={{ width: `${progress}%` }}></div>
                     </div>
-                    <div className="relative mb-12">
-                        <div className="w-40 h-40 border-4 border-luna-gold/10 border-t-luna-gold rounded-full animate-spin mx-auto"></div>
-                        <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-black text-luna-gold">{Math.floor(progress)}%</div>
-                    </div>
-                    <h2 className="text-5xl font-black text-white mb-6 font-mono uppercase tracking-tighter italic">{statusMessage}</h2>
-                    <div className="flex justify-center gap-10">
-                        <div className="flex flex-col">
-                            <span className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.4em] mb-1">Pass Index</span>
-                            <span className="text-xs font-bold text-starlight">{(cinematicProfile || 'natural').toUpperCase()}</span>
+
+                    <h2 className="text-3xl sm:text-4xl font-black text-white mb-2 font-mono uppercase tracking-tighter italic">{statusMessage}</h2>
+                    <p className="text-[10px] text-mystic-gray uppercase tracking-[0.3em] font-bold mb-8">Live render preview</p>
+
+                    <div className="relative bg-eclipse-black rounded-2xl overflow-hidden border border-white/10 shadow-2xl mb-8 mx-auto" style={{ maxWidth: '720px', aspectRatio: `${width} / ${height}` }}>
+                        <canvas ref={canvasRef} width={width} height={height} className="block w-full h-full" />
+                        <div className="absolute bottom-3 right-3 px-3 py-1.5 bg-eclipse-black/80 rounded-lg font-mono text-[10px] text-luna-gold font-black backdrop-blur-md">
+                            {Math.floor(progress)}%
                         </div>
                     </div>
+
+                    <div className="flex justify-center gap-8 sm:gap-12 flex-wrap">
+                        <div className="flex flex-col">
+                            <span className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.4em] mb-1">Scene</span>
+                            <span className="text-sm font-bold text-starlight font-mono">{currentSceneIdx + 1} / {scenes.length}</span>
+                        </div>
+                        <div className="flex flex-col">
+                            <span className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.4em] mb-1">ETA</span>
+                            <span className="text-sm font-bold text-starlight font-mono">
+                                {etaSec === null ? '—' : etaSec < 60 ? `${etaSec}s` : `${Math.floor(etaSec / 60)}m ${etaSec % 60}s`}
+                            </span>
+                        </div>
+                        <div className="flex flex-col">
+                            <span className="text-[8px] font-black text-mystic-gray uppercase tracking-[0.4em] mb-1">Pass Index</span>
+                            <span className="text-sm font-bold text-starlight">{(cinematicProfile || 'natural').toUpperCase()}</span>
+                        </div>
+                    </div>
+
+                    <button onClick={onCancel} className="mt-10 text-mystic-gray hover:text-red-300 uppercase tracking-widest text-[9px] font-black py-2 transition-colors">
+                        <i className="fa-solid fa-circle-stop mr-2"></i>Abort Render
+                    </button>
                 </div>
             )}
-            <canvas ref={canvasRef} width={width} height={height} className="hidden" />
         </div>
     );
 };

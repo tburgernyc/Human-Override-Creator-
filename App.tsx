@@ -7,6 +7,7 @@ import { Player } from './components/Player';
 import { Renderer } from './components/Renderer';
 import { CharacterModal } from './components/CharacterModal';
 import { AddCharacterModal } from './components/AddCharacterModal';
+import { Toasts, type ToastItem } from './components/Toasts';
 import { LandingPage } from './components/LandingPage';
 import { ProjectsView } from './components/ProjectsView';
 import { SceneInspector } from './components/SceneInspector';
@@ -109,6 +110,7 @@ const App: React.FC = () => {
   const [inspectingScene, setInspectingScene] = useState<Scene | null>(null);
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
   const [showAddCharacter, setShowAddCharacter] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [bRollSuggestions, setBRollSuggestions] = useState<Scene[]>([]);
   const [currentTaskLabel, setCurrentTaskLabel] = useState("");
@@ -118,9 +120,23 @@ const App: React.FC = () => {
   const [autoDiagnosisTriggered, setAutoDiagnosisTriggered] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Mutable cancel flag for batch operations — set by handleCancelBatch, checked between scenes.
+  const batchCancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const [isCancellingBatch, setIsCancellingBatch] = useState(false);
 
-  const activePhase: ProductionPhase = !project.script ? 'genesis' : project.scenes.length === 0 ? 'genesis' : !Object.values(project.assets).some(a => a.status === 'complete') ? 'manifest' : 'synthesis';
-  const isAllComplete = project.scenes.length > 0 && project.scenes.every(s => project.assets[s.id]?.status === 'complete');
+  const completeSceneCount = project.scenes.filter(s => project.assets[s.id]?.status === 'complete').length;
+  const totalSceneCount = project.scenes.length;
+  const isAllComplete = totalSceneCount > 0 && completeSceneCount === totalSceneCount;
+
+  const activePhase: ProductionPhase = (() => {
+    if (!project.script || totalSceneCount === 0) return 'genesis';
+    if (completeSceneCount === 0) return 'manifest';
+    if (completeSceneCount < totalSceneCount) return 'synthesis';
+    return 'post';
+  })();
+
+  // 0-5 bars based on how much of the scene grid is rendered
+  const healthBars = totalSceneCount === 0 ? 0 : Math.min(5, Math.max(1, Math.round((completeSceneCount / totalSceneCount) * 5)));
 
   useEffect(() => {
     const checkAuth = async () => { if (window.aistudio) setHasAuth(await window.aistudio.hasSelectedApiKey()); else setHasAuth(true); };
@@ -156,7 +172,19 @@ const App: React.FC = () => {
   const addLog = (message: string, type: LogEntry['type'] = 'system', actionLabel?: string, actionId?: string, actionParams?: any) => {
     const newEntry: LogEntry = { id: Date.now().toString(), timestamp: Date.now(), type, message, actionLabel, actionId, actionParams };
     setProject(p => ({ ...p, productionLog: [newEntry, ...p.productionLog].slice(0, 50) }));
+    // Surface error and success entries as toasts so users see them without opening the assistant panel.
+    if (type === 'error' || type === 'success') {
+      const toast: ToastItem = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        type,
+        message,
+        timestamp: Date.now(),
+      };
+      setToasts(prev => [...prev, toast].slice(-5));
+    }
   };
+
+  const dismissToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
 
   const handleApplyDraft = (draft: DirectorDraft) => {
     setProject(p => ({
@@ -437,17 +465,36 @@ const App: React.FC = () => {
 
   const handleManifestAll = async () => {
     if (isBatchProcessing) return;
+    batchCancelRef.current.cancelled = false;
+    setIsCancellingBatch(false);
     setIsBatchProcessing(true);
     addLog("Batch Manifesting Sequence Initialized...", "system");
+    let cancelledMid = false;
     for (let i = 0; i < project.scenes.length; i++) {
+      if (batchCancelRef.current.cancelled) {
+        cancelledMid = true;
+        break;
+      }
       const scene = project.scenes[i];
       if (project.assets[scene.id]?.status === 'complete') continue;
       setCurrentTaskLabel(`Manifesting Sequence #${i + 1}: ${scene.description.substring(0, 20)}...`);
       await handleGenerateSceneAsset(scene.id);
     }
     setIsBatchProcessing(false);
+    setIsCancellingBatch(false);
     setCurrentTaskLabel("");
-    addLog("Full sequence manifest complete.", "success");
+    if (cancelledMid) {
+      addLog("Batch manifest cancelled by user. Completed scenes preserved.", "system");
+    } else {
+      addLog("Full sequence manifest complete.", "success");
+    }
+  };
+
+  const handleCancelBatch = () => {
+    if (!isBatchProcessing || isCancellingBatch) return;
+    batchCancelRef.current.cancelled = true;
+    setIsCancellingBatch(true);
+    addLog("Cancellation requested — finishing current scene...", "system");
   };
 
   const handleAddBRoll = (newScenes: Scene[]) => {
@@ -507,6 +554,56 @@ const App: React.FC = () => {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
+  const scrollToPhase = (phase: ProductionPhase) => {
+    const el = document.getElementById(`phase-${phase}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // Drives the single "what should I do next" CTA shown above the scene grid.
+  // Centralizes the previously-implicit choreography between script → cast → batch → export.
+  const nextStep: { step: number; title: string; desc: string; action?: { label: string; onClick: () => void } } | null = (() => {
+    if (project.status === 'analyzing' || project.status === 'character_gen') {
+      return null; // ScriptInput's overlay is already onscreen
+    }
+    if (!project.script || totalSceneCount === 0) {
+      return {
+        step: 1,
+        title: 'Paste a script to begin',
+        desc: 'Drop a script into the Creative Terminal below. Characters, scenes, and dialogue extract automatically.',
+      };
+    }
+    if (isBatchProcessing) {
+      return {
+        step: 2,
+        title: 'Batch manifest in progress',
+        desc: currentTaskLabel || 'Synthesizing visuals and audio for every scene.',
+      };
+    }
+    const pending = totalSceneCount - completeSceneCount;
+    if (pending === totalSceneCount) {
+      return {
+        step: 2,
+        title: 'Generate all scenes',
+        desc: `${totalSceneCount} scene${totalSceneCount === 1 ? '' : 's'} ready to manifest. Estimated runtime: ~${Math.max(1, Math.ceil(totalSceneCount * 1.5))} min.`,
+        action: { label: 'Initialize Batch Manifest', onClick: handleManifestAll },
+      };
+    }
+    if (pending > 0) {
+      return {
+        step: 2,
+        title: `Finish remaining ${pending} scene${pending === 1 ? '' : 's'}`,
+        desc: `${completeSceneCount}/${totalSceneCount} complete. Resume the batch to fill in the rest.`,
+        action: { label: 'Continue Batch Manifest', onClick: handleManifestAll },
+      };
+    }
+    return {
+      step: 3,
+      title: 'Export your final video',
+      desc: 'All scenes complete. Compile the master production unit.',
+      action: { label: 'Initialize Master Export', onClick: () => setShowRenderer(true) },
+    };
+  })();
+
   return (
     <Layout
       activeView={view}
@@ -561,23 +658,29 @@ const App: React.FC = () => {
 
                 <div className="flex bg-eclipse-black/40 p-1.5 rounded-2xl nm-inset-input border border-white/5 overflow-x-auto max-w-full scrollbar-hide">
                   {[
-                    { id: 'genesis', label: '01 Genesis', icon: 'fa-seedling' },
-                    { id: 'manifest', label: '02 Manifest', icon: 'fa-file-invoice' },
-                    { id: 'synthesis', label: '03 Synthesis', icon: 'fa-wand-magic-sparkles' },
-                    { id: 'post', label: '04 Post', icon: 'fa-clapperboard' }
+                    { id: 'genesis' as ProductionPhase, label: '01 Genesis', icon: 'fa-seedling' },
+                    { id: 'manifest' as ProductionPhase, label: '02 Manifest', icon: 'fa-file-invoice' },
+                    { id: 'synthesis' as ProductionPhase, label: '03 Synthesis', icon: 'fa-wand-magic-sparkles' },
+                    { id: 'post' as ProductionPhase, label: '04 Post', icon: 'fa-clapperboard' }
                   ].map((phase) => (
-                    <div key={phase.id} className={`px-6 py-3 rounded-xl flex items-center gap-3 transition-all shrink-0 ${activePhase === phase.id ? 'nm-button-gold text-white shadow-nm-gold scale-105 z-10' : 'text-mystic-gray opacity-40'}`}>
+                    <button
+                      key={phase.id}
+                      type="button"
+                      onClick={() => scrollToPhase(phase.id)}
+                      className={`px-6 py-3 rounded-xl flex items-center gap-3 transition-all shrink-0 cursor-pointer hover:opacity-100 hover:scale-105 ${activePhase === phase.id ? 'nm-button-gold text-white shadow-nm-gold scale-105 z-10' : 'text-mystic-gray opacity-40'}`}
+                      aria-label={`Jump to ${phase.label}`}
+                    >
                       <i className={`fa-solid ${phase.icon} text-xs`}></i>
                       <span className="text-[10px] font-black uppercase tracking-widest">{phase.label}</span>
-                    </div>
+                    </button>
                   ))}
                 </div>
 
                 <div className="flex gap-4">
                   <div className="text-right">
-                    <p className="text-[8px] text-mystic-gray uppercase font-black tracking-widest mb-1">Neural Health</p>
+                    <p className="text-[8px] text-mystic-gray uppercase font-black tracking-widest mb-1">Render Progress</p>
                     <div className="flex gap-1">
-                      {[...Array(5)].map((_, i) => <div key={i} className={`w-4 h-1 rounded-full ${i < 4 ? 'bg-luna-gold shadow-[0_0_5px_#3b82f6]' : 'bg-white/10'}`}></div>)}
+                      {[...Array(5)].map((_, i) => <div key={i} className={`w-4 h-1 rounded-full ${i < healthBars ? 'bg-luna-gold shadow-[0_0_5px_#3b82f6]' : 'bg-white/10'}`}></div>)}
                     </div>
                   </div>
                   <div className="w-px h-10 bg-white/5 mx-2"></div>
@@ -588,11 +691,39 @@ const App: React.FC = () => {
               </div>
             </section>
 
+            {/* NEXT STEP CTA — primary driver for the whole pipeline */}
+            {nextStep && (
+              <section className="nm-panel p-1 rounded-[2rem] bg-gradient-to-br from-luna-gold/5 via-transparent to-transparent border border-luna-gold/20 shadow-nm-gold">
+                <div className="p-7 sm:p-9 flex flex-col sm:flex-row sm:items-center gap-6 sm:gap-8">
+                  <div className="flex items-center gap-5 flex-1 min-w-0">
+                    <div className="w-14 h-14 rounded-2xl nm-button-gold flex items-center justify-center text-white shadow-nm-gold shrink-0">
+                      <span className="font-mono text-base font-black">0{nextStep.step}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-black text-luna-gold uppercase tracking-[0.4em] mb-1.5">Next Step</p>
+                      <h3 className="text-xl sm:text-2xl font-black text-white font-mono uppercase tracking-tight leading-tight">{nextStep.title}</h3>
+                      <p className="text-[11px] text-celestial-stone mt-2 leading-relaxed">{nextStep.desc}</p>
+                    </div>
+                  </div>
+                  {nextStep.action && (
+                    <button
+                      onClick={nextStep.action.onClick}
+                      disabled={isBatchProcessing}
+                      className="px-8 py-4 nm-button-gold text-white rounded-2xl font-black uppercase tracking-[0.25em] text-[10px] shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-3 shrink-0 disabled:opacity-30 disabled:hover:scale-100"
+                    >
+                      <i className="fa-solid fa-bolt-lightning"></i>
+                      {nextStep.action.label}
+                    </button>
+                  )}
+                </div>
+              </section>
+            )}
+
             {/* PRODUCTION HEALTH SUMMARY */}
             {project.scenes.length > 0 && <ProductionStageOverview project={project} />}
 
             {/* STAGE 1: GENESIS (Script & Reference) */}
-            <div className={`grid grid-cols-1 xl:grid-cols-12 gap-10 transition-all duration-700 ${activePhase !== 'genesis' ? 'opacity-50 hover:opacity-100 blur-[1px] hover:blur-0' : ''}`}>
+            <div id="phase-genesis" className={`grid grid-cols-1 xl:grid-cols-12 gap-10 transition-all duration-700 scroll-mt-32 ${activePhase !== 'genesis' ? 'opacity-50 hover:opacity-100 blur-[1px] hover:blur-0' : ''}`}>
               <div className="xl:col-span-8">
                 <ScriptInput onAnalyze={handleAnalyze} isAnalyzing={project.status === 'analyzing' || project.status === 'character_gen'} stepMessage={project.currentStepMessage} />
               </div>
@@ -624,7 +755,7 @@ const App: React.FC = () => {
             {/* STAGE 2: MANIFEST (Cast & Timeline) */}
             {project.scenes.length > 0 && (
               <div className="space-y-10 animate-in slide-in-from-bottom-10 duration-1000">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+                <div id="phase-manifest" className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start scroll-mt-32">
                   <div className="lg:col-span-4 flex flex-col gap-6">
                     <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={() => setShowAddCharacter(true)} onAudit={() => setShowAuditor(true)} />
                     <div className="nm-panel p-8 border border-white/5 bg-black/40">
@@ -671,7 +802,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* STAGE 3: SYNTHESIS (Scene Grid) */}
-                <section className="space-y-10">
+                <section id="phase-synthesis" className="space-y-10 scroll-mt-32">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
                     <div>
                       <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Neural Synthesis Lab</h3>
@@ -718,7 +849,7 @@ const App: React.FC = () => {
                 </section>
 
                 {/* STAGE 4: POST-PRODUCTION (Mastering & Distribution) */}
-                <section className="space-y-10 py-10">
+                <section id="phase-post" className="space-y-10 py-10 scroll-mt-32">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end border-b border-white/5 pb-8 gap-4">
                     <div>
                       <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Post-Production & Release</h3>
@@ -826,7 +957,8 @@ const App: React.FC = () => {
       {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} onCancel={() => setShowRenderer(false)} onComplete={() => { }} />}
       {showManifest && <ProductionManifest project={project} youtubeMetadata={youtubeMetadata} onClose={() => setShowManifest(false)} />}
 
-      <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} />
+      <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} onCancel={handleCancelBatch} isCancelling={isCancellingBatch} />
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </Layout>
   );
 };
