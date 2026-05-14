@@ -135,6 +135,12 @@ export interface ViralPotential {
   predictionSummary: string;
 }
 
+export interface YoutubeMetadata {
+  hookScore: number;
+  audience: string;
+  suggestedTitles: string[];
+}
+
 export interface ProjectState {
   script: string;
   status: 'idle' | 'analyzing' | 'character_gen' | 'scene_gen' | 'animating' | 'audio_gen' | 'validating' | 'rendering' | 'ready';
@@ -148,6 +154,7 @@ export interface ProjectState {
   renderUrl?: string;
   globalStyle?: string;
   viralData?: ViralPotential;
+  youtubeMetadata?: YoutubeMetadata;
   productionSeed: number;
   keyArtSceneId?: string;
   activeDraft?: DirectorDraft | null;

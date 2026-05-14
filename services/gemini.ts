@@ -474,11 +474,11 @@ export const generateSceneImage = async (scene: Scene, characters: Character[], 
 
   parts.push({ text: `Style: ${style}. Scene Description: ${scene.visualPrompt}. ${feedback || ''}. Cinematic 8k rendering. High quality textures.` });
 
-  const response = await ai.models.generateContent({
+  const response = await retryWithBackoff(() => ai.models.generateContent({
     model: MODEL_NAMES.IMAGE,
     contents: { parts },
     config: { imageConfig: { aspectRatio, imageSize: resolution === Resolution.FHD ? '2K' : '1K' }, seed }
-  });
+  }));
   const data = response.candidates?.[0]?.content?.parts.find(p => p.inlineData)?.inlineData?.data;
   if (!data) throw new Error('Scene image generation returned no data. The prompt may have been safety-filtered.');
   return `data:image/png;base64,${data}`;
@@ -493,12 +493,14 @@ export interface SceneVideoResult {
 
 export const generateSceneVideo = async (imageBase64: string, prompt: string, aspectRatio: AspectRatio, resolution: Resolution, style: string = "Cinematic"): Promise<SceneVideoResult> => {
   const ai = getAIClient();
-  let operation: any = await ai.models.generateVideos({
+  // Only the initial operation submission is wrapped in retry — the polling
+  // loop below has its own exponential backoff for transient 5xx during polls.
+  let operation: any = await retryWithBackoff(() => ai.models.generateVideos({
     model: resolution === Resolution.FHD ? MODEL_NAMES.VIDEO : MODEL_NAMES.VIDEO_FAST,
     prompt: `${style}. ${prompt}. Subtle cinematic motion.`,
     image: { imageBytes: stripDataUriPrefix(imageBase64), mimeType: 'image/png' },
     config: { numberOfVideos: 1, aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any, resolution }
-  });
+  }));
 
   // Exponential backoff with 30s cap; total wall-clock budget 10 min.
   const startedAt = Date.now();
@@ -529,7 +531,7 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
   }
   const ai = getAIClient();
   // Only 720p videos can be extended currently according to Veo guidelines
-  let operation: any = await ai.models.generateVideos({
+  let operation: any = await retryWithBackoff(() => ai.models.generateVideos({
     model: 'veo-3.1-generate-preview',
     prompt: `Continue the scene: ${prompt}`,
     video: { uri: prevVideoUri },
@@ -538,7 +540,7 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
       resolution: '720p',
       aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any
     }
-  });
+  }));
 
   const startedAt = Date.now();
   const TOTAL_BUDGET_MS = 10 * 60 * 1000;
@@ -558,11 +560,26 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
   return { videoUrl, videoUri };
 };
 
+// Number of distinct speakers Gemini's multi-speaker TTS reliably handles in
+// one call. Above this we fall back to per-line single-speaker stitching.
+const MULTI_SPEAKER_LIMIT = 5;
+const TTS_SAMPLE_RATE = 24000;
+const INTER_LINE_SILENCE_MS = 150;
+
+// Returns a Uint8Array of 16-bit PCM silence at the TTS sample rate. Used to
+// pad between concatenated single-speaker lines so they don't slam together.
+const makeSilence = (durationMs: number): Uint8Array => {
+  const samples = Math.floor(TTS_SAMPLE_RATE * (durationMs / 1000));
+  return new Uint8Array(samples * 2); // zeros = silence in signed 16-bit PCM
+};
+
 export const generateSceneAudio = async (lines: DialogueLine[], characters: Character[]): Promise<string> => {
   const ai = getAIClient();
   const speakersInScene = Array.from(new Set(lines.map(l => l.speaker)));
 
-  if (speakersInScene.length === 2) {
+  // Multi-speaker path: one call handles 2..N distinct voices with shared
+  // acoustic context. Better-sounding than stitched single-speaker output.
+  if (speakersInScene.length >= 2 && speakersInScene.length <= MULTI_SPEAKER_LIMIT) {
     const prompt = `TTS the following conversation:\n${lines.map(l => `${l.speaker}: ${l.text}`).join('\n')}`;
     const speakerConfigs = speakersInScene.map(name => {
       const char = characters.find(c => c.name === name);
@@ -573,44 +590,56 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
       };
     });
 
-    const res = await ai.models.generateContent({
-      model: MODEL_NAMES.TTS,
-      contents: [{ parts: [{ text: prompt }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          multiSpeakerVoiceConfig: {
-            speakerVoiceConfigs: speakerConfigs as any
+    try {
+      const res = await retryWithBackoff(() => ai.models.generateContent({
+        model: MODEL_NAMES.TTS,
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            multiSpeakerVoiceConfig: {
+              speakerVoiceConfigs: speakerConfigs as any
+            }
           }
         }
-      }
-    });
-    const data = res.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    return data ? `data:audio/pcm;base64,${data}` : "";
+      }));
+      const data = res.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (data) return `data:audio/pcm;base64,${data}`;
+      // Empty response — fall through to single-speaker stitching as a fallback
+      console.warn('Multi-speaker TTS returned no audio; falling back to per-line synthesis.');
+    } catch (e) {
+      console.warn('Multi-speaker TTS failed; falling back to per-line synthesis:', e);
+    }
   }
 
-  // Parallelize TTS for single-speaker or 3+ speaker scenarios.
-  // Use allSettled so one bad line doesn't kill the whole scene's audio.
+  // Single-speaker or fallback path: render each line separately and concat
+  // with brief silence in between. allSettled so one bad line doesn't kill
+  // the whole scene's audio.
   const filteredLines = lines.filter(line => line.text.trim());
   const settled = await Promise.allSettled(
     filteredLines.map(line => {
       const char = characters.find(c => c.name === line.speaker);
       const preset = VOICE_PRESETS.find(p => p.id === char?.voiceId) || VOICE_PRESETS[0];
-      return ai.models.generateContent({
+      return retryWithBackoff(() => ai.models.generateContent({
         model: MODEL_NAMES.TTS,
         contents: [{ parts: [{ text: `<speak><prosody rate="${char?.voiceSettings?.speed || 1}" pitch="${char?.voiceSettings?.pitch || 0}st">${line.text}</prosody></speak>` }] }],
         config: { responseModalities: [Modality.AUDIO], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: preset.apiVoiceName } } } }
-      }).then(res => {
+      })).then(res => {
         const data = res.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         return data ? base64ToUint8Array(data) : null;
       });
     })
   );
 
+  const silence = makeSilence(INTER_LINE_SILENCE_MS);
   const parts: Uint8Array[] = [];
   settled.forEach((r, i) => {
-    if (r.status === 'fulfilled' && r.value) parts.push(r.value);
-    else if (r.status === 'rejected') console.error(`TTS line ${i} failed:`, r.reason);
+    if (r.status === 'fulfilled' && r.value) {
+      if (parts.length > 0) parts.push(silence); // gap between lines
+      parts.push(r.value);
+    } else if (r.status === 'rejected') {
+      console.error(`TTS line ${i} failed:`, r.reason);
+    }
   });
   if (parts.length === 0 && filteredLines.length > 0) {
     throw new Error(`All ${filteredLines.length} TTS line(s) failed.`);

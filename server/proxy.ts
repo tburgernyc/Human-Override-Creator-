@@ -1,11 +1,17 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const app = express();
-const PORT = process.env.PROXY_PORT || 3001;
 
-// Load API key from environment (NOT exposed to client)
+// Railway and most hosts set PORT; fall back to the dev port the Vite proxy expects.
+const PORT = parseInt(process.env.PORT || process.env.PROXY_PORT || '3001', 10);
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PROD = NODE_ENV === 'production';
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 if (!GEMINI_API_KEY) {
@@ -14,12 +20,20 @@ if (!GEMINI_API_KEY) {
     process.exit(1);
 }
 
-app.use(cors({ origin: ['http://localhost:3000', 'http://127.0.0.1:3000'] }));
+// In dev the Vite dev server on :3000 calls the proxy on :3001, so allow that
+// origin. In production the same Express server serves the static bundle and
+// the API together, so requests are same-origin and CORS is not strictly needed.
+const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+app.use(cors({ origin: IS_PROD ? true : ALLOWED_ORIGINS }));
 app.use(express.json({ limit: '50mb' }));
 
-// Health check
+// Health check — used by Railway's healthchecks and local diagnostics.
 app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', hasKey: !!GEMINI_API_KEY });
+    res.json({ status: 'ok', hasKey: !!GEMINI_API_KEY, env: NODE_ENV });
 });
 
 // Proxy all Gemini API requests — the key is injected server-side
@@ -48,6 +62,10 @@ app.all('/api/gemini/*', async (req, res) => {
         const response = await fetch(url.toString(), fetchOptions);
         const data = await response.text();
 
+        if (!response.ok) {
+            console.warn(`Gemini upstream error ${response.status}: ${data.slice(0, 200)}`);
+        }
+
         res.status(response.status)
             .set('Content-Type', response.headers.get('Content-Type') || 'application/json')
             .send(data);
@@ -59,6 +77,8 @@ app.all('/api/gemini/*', async (req, res) => {
 
 // Secure video/file download endpoint — injects API key server-side so the client never holds it.
 // The URI allowlist prevents this from acting as an open proxy.
+// On Railway, request timeouts are generous enough that large Veo downloads complete
+// without the per-request limits that constrain serverless deployments.
 app.get('/api/download', async (req, res) => {
     const uri = req.query.uri as string;
     if (!uri || !uri.startsWith('https://generativelanguage.googleapis.com/')) {
@@ -68,19 +88,61 @@ app.get('/api/download', async (req, res) => {
         const url = new URL(uri);
         url.searchParams.set('key', GEMINI_API_KEY!);
         const response = await fetch(url.toString());
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.warn(`Download upstream error ${response.status}: ${errText.slice(0, 200)}`);
+            return res.status(response.status).json({ error: 'Upstream fetch failed', status: response.status, details: errText.slice(0, 500) });
+        }
+
         res.status(response.status);
         const contentType = response.headers.get('Content-Type');
         if (contentType) res.setHeader('Content-Type', contentType);
-        const buffer = await response.arrayBuffer();
-        res.send(Buffer.from(buffer));
+        // Stream the body instead of buffering — keeps memory flat for large videos.
+        if (response.body) {
+            const reader = response.body.getReader();
+            const pump = async () => {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    res.write(Buffer.from(value));
+                }
+                res.end();
+            };
+            await pump();
+        } else {
+            const buffer = await response.arrayBuffer();
+            res.send(Buffer.from(buffer));
+        }
     } catch (error: any) {
         console.error('Download proxy error:', error.message);
         res.status(500).json({ error: 'Download proxy failed', details: error.message });
     }
 });
 
+// In production we also serve the static frontend bundle. Vite outputs to
+// `dist/` next to this server file's package root.
+if (IS_PROD) {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const distDir = path.resolve(__dirname, '..', 'dist');
+    if (fs.existsSync(distDir)) {
+        app.use(express.static(distDir));
+        // SPA fallback — anything that's not an API route returns index.html
+        // so the client-side router can take over.
+        app.get(/^(?!\/api\/).*/, (_req, res) => {
+            res.sendFile(path.join(distDir, 'index.html'));
+        });
+        console.log(`📦  Serving static bundle from ${distDir}`);
+    } else {
+        console.warn(`⚠️  Production mode but no dist/ directory found at ${distDir}. Run "npm run build" first.`);
+    }
+}
+
 app.listen(PORT, () => {
-    console.log(`🛡️  API Proxy running on http://localhost:${PORT}`);
+    console.log(`🛡️  Server running on http://localhost:${PORT} (env: ${NODE_ENV})`);
     console.log(`   Gemini API key is secured server-side.`);
-    console.log(`   Frontend at http://localhost:3000 will proxy through here.`);
+    if (!IS_PROD) {
+        console.log(`   Frontend at http://localhost:3000 will proxy through here.`);
+    }
 });

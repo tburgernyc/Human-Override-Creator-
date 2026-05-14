@@ -44,6 +44,7 @@ import {
   extendSceneVideo
 } from './services/gemini';
 import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
+import { saveAssets as saveAssetsToIDB, loadAssets as loadAssetsFromIDB, clearAssets as clearAssetsFromIDB } from './services/assetStore';
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v7';
 const ALL_PROJECTS_KEY = 'human_override_archives_v5';
@@ -61,23 +62,48 @@ const DEFAULT_PROJECT: ProjectState = {
   }
 };
 
+// Brings archived projects forward through schema changes (new fields, renamed
+// keys, missing arrays). Without this, loading a pre-Phase-1 archive surfaces
+// undefined where the UI expects arrays/objects, breaking the dashboard.
+const migrateProject = (raw: any): ProjectState => {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_PROJECT };
+  return {
+    ...DEFAULT_PROJECT,
+    ...raw,
+    // Always start with empty assets — base64 binaries are too large for
+    // localStorage and IndexedDB recovery (Phase 4.2) is the canonical source.
+    assets: {},
+    mastering: { ...DEFAULT_PROJECT.mastering!, ...(raw.mastering || {}) },
+    modules: (raw.modules && typeof raw.modules === 'object') ? raw.modules : {},
+    productionLog: Array.isArray(raw.productionLog) ? raw.productionLog : [],
+    characters: Array.isArray(raw.characters) ? raw.characters : [],
+    scenes: Array.isArray(raw.scenes) ? raw.scenes : [],
+    tasks: Array.isArray(raw.tasks) ? raw.tasks : [],
+    // Reset transient runtime state when loading from disk
+    status: 'idle',
+    currentStepMessage: '',
+    activeDraft: null,
+  };
+};
+
 const App: React.FC = () => {
   const [project, setProject] = useState<ProjectState>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-      // Always start with empty assets — base64 binaries are too large for localStorage
-      if (saved) return { ...DEFAULT_PROJECT, ...JSON.parse(saved), assets: {} };
+      if (saved) return migrateProject(JSON.parse(saved));
     } catch (e) {
       console.warn('Corrupted project data in localStorage, resetting to defaults.', e);
       localStorage.removeItem(LOCAL_STORAGE_KEY);
     }
-    return DEFAULT_PROJECT;
+    return { ...DEFAULT_PROJECT };
   });
 
   const [archives, setArchives] = useState<ProjectState[]>(() => {
     try {
       const saved = localStorage.getItem(ALL_PROJECTS_KEY);
-      return typeof saved === 'string' ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed.map(migrateProject) : [];
     } catch (e) {
       console.warn('Corrupted archives data in localStorage, resetting.', e);
       localStorage.removeItem(ALL_PROJECTS_KEY);
@@ -116,7 +142,6 @@ const App: React.FC = () => {
   const [currentTaskLabel, setCurrentTaskLabel] = useState("");
   const [hasAuth, setHasAuth] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [youtubeMetadata, setYoutubeMetadata] = useState<{ hookScore: number; audience: string; suggestedTitles: string[] } | null>(null);
   const [autoDiagnosisTriggered, setAutoDiagnosisTriggered] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -143,8 +168,31 @@ const App: React.FC = () => {
     checkAuth();
   }, []);
 
+  // Restore assets from IndexedDB on mount. localStorage only holds metadata
+  // (scenes, characters, prompts) because base64 binaries exceed its quota.
+  // Without this, a page refresh used to wipe 10-20 minutes of generated work.
   useEffect(() => {
-    // Debounce saves and strip binary assets — base64 images/videos exceed localStorage quota
+    let cancelled = false;
+    (async () => {
+      const stored = await loadAssetsFromIDB();
+      if (cancelled || !stored) return;
+      setProject(prev => {
+        // Only restore assets for scenes we actually still have. Stale entries
+        // for deleted scenes get dropped here.
+        const validSceneIds = new Set(prev.scenes.map(s => s.id));
+        const filtered: typeof stored = {};
+        for (const [sceneId, asset] of Object.entries(stored)) {
+          if (validSceneIds.has(sceneId)) filtered[sceneId] = asset;
+        }
+        return { ...prev, assets: filtered };
+      });
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    // Debounce saves and strip binary assets from localStorage. Assets persist
+    // separately to IndexedDB (see effect below) so refresh restores them.
     const timer = setTimeout(() => {
       try {
         const { assets: _stripped, ...persistable } = project;
@@ -157,6 +205,15 @@ const App: React.FC = () => {
     }, 1000);
     return () => clearTimeout(timer);
   }, [project]);
+
+  // Asset persistence to IndexedDB, debounced separately from the metadata
+  // save so a slider tweak doesn't rewrite 50MB of base64.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveAssetsToIDB(project.assets).catch(e => console.warn('Asset persist failed:', e));
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [project.assets]);
 
   useEffect(() => {
     localStorage.setItem(ALL_PROJECTS_KEY, JSON.stringify(archives));
@@ -206,7 +263,8 @@ const App: React.FC = () => {
       setChatOpen(true);
       addLog("Audit Complete: Signal transmitted to Director terminal.", "success");
     } catch (e) {
-      addLog("Audit failed: Narrative link unstable.", "error");
+      const msg = e instanceof Error ? e.message : 'narrative link unstable';
+      addLog(`Audit failed: ${msg}`, "error");
     } finally {
       setIsBatchProcessing(false);
     }
@@ -271,8 +329,7 @@ const App: React.FC = () => {
 
       // Stage 1: seat the cast and scenes so the UI shows progress immediately
       const synthMsg = `Synthesizing ${characters.length} character${characters.length === 1 ? '' : 's'}...`;
-      setProject(prev => ({ ...prev, status: 'character_gen', characters, scenes, assets: initialAssets, tasks, modules, currentStepMessage: synthMsg }));
-      setYoutubeMetadata(metadata);
+      setProject(prev => ({ ...prev, status: 'character_gen', characters, scenes, assets: initialAssets, tasks, modules, currentStepMessage: synthMsg, youtubeMetadata: metadata }));
       addLog(`Script parsed: ${characters.length} cast, ${scenes.length} scenes. Generating character references...`, "system");
 
       // Stage 2: generate character reference images in parallel. Each completion
@@ -369,8 +426,10 @@ const App: React.FC = () => {
       let audio: string | undefined;
       try {
         audio = await generateSceneAudio(scene.narratorLines, project.characters);
-      } catch {
-        addLog(`Audio synthesis failed for Scene #${sceneId} — visual assets preserved.`, 'error');
+      } catch (audioErr) {
+        const audioMsg = audioErr instanceof Error ? audioErr.message : 'TTS failed';
+        const sceneIdx = project.scenes.indexOf(scene) + 1;
+        addLog(`Audio synthesis failed for Scene #${sceneIdx}: ${audioMsg} — visual assets preserved.`, 'error');
       }
 
       const finalVariant: AssetHistoryItem = { imageUrl: img, videoUrl, timestamp: Date.now() };
@@ -394,8 +453,10 @@ const App: React.FC = () => {
         };
       });
     } catch (error) {
-      addLog(`Sequence generation failed for Scene #${sceneId}`, "error");
-      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], status: 'error' } } }));
+      const msg = error instanceof Error ? error.message : 'generation failed';
+      const sceneIdx = project.scenes.findIndex(s => s.id === sceneId) + 1;
+      addLog(`Sequence generation failed for Scene #${sceneIdx}: ${msg}`, "error");
+      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], status: 'error', error: msg } } }));
     }
   };
 
@@ -475,17 +536,44 @@ const App: React.FC = () => {
     setIsCancellingBatch(false);
     setIsBatchProcessing(true);
     addLog("Batch Manifesting Sequence Initialized...", "system");
-    let cancelledMid = false;
-    for (let i = 0; i < project.scenes.length; i++) {
-      if (batchCancelRef.current.cancelled) {
-        cancelledMid = true;
-        break;
-      }
-      const scene = project.scenes[i];
-      if (project.assets[scene.id]?.status === 'complete') continue;
-      setCurrentTaskLabel(`Manifesting Sequence #${i + 1}: ${scene.description.substring(0, 20)}...`);
-      await handleGenerateSceneAsset(scene.id);
+
+    // Build the work queue: only scenes that aren't already complete.
+    const pending = project.scenes
+      .map((scene, idx) => ({ scene, idx }))
+      .filter(({ scene }) => project.assets[scene.id]?.status !== 'complete');
+
+    if (pending.length === 0) {
+      setIsBatchProcessing(false);
+      addLog("All scenes already complete — nothing to manifest.", "system");
+      return;
     }
+
+    // Concurrency=2 keeps wall-clock time roughly halved versus sequential
+    // without making rate-limit hits or memory pressure unmanageable. Tune up
+    // if Gemini quotas allow.
+    const CONCURRENCY = 2;
+    let cursor = 0;
+    let cancelledMid = false;
+
+    const worker = async () => {
+      while (true) {
+        if (batchCancelRef.current.cancelled) { cancelledMid = true; return; }
+        const myIdx = cursor++;
+        if (myIdx >= pending.length) return;
+        const { scene, idx } = pending[myIdx];
+        setCurrentTaskLabel(`Manifesting Sequence #${idx + 1}: ${scene.description.substring(0, 20)}...`);
+        try {
+          await handleGenerateSceneAsset(scene.id);
+        } catch (e) {
+          // handleGenerateSceneAsset has its own error path; this is defense-in-depth
+          // so one worker's unexpected throw doesn't kill the whole batch.
+          console.error('Batch worker caught unexpected error for scene', scene.id, e);
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pending.length) }, () => worker()));
+
     setIsBatchProcessing(false);
     setIsCancellingBatch(false);
     setCurrentTaskLabel("");
@@ -620,7 +708,7 @@ const App: React.FC = () => {
     >
       <div className={`relative min-h-screen transition-all duration-500 ease-in-out pb-32 ${chatOpen ? 'xl:pr-[25%]' : ''}`}>
         {view === 'landing' && <LandingPage onStart={() => setView('dashboard')} />}
-        {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { setProject(p); setView('dashboard'); }} onDelete={idx => setArchives(prev => prev.filter((_, i) => i !== idx))} onImport={() => fileInputRef.current?.click()} />}
+        {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { clearAssetsFromIDB(); setProject(migrateProject(p)); setView('dashboard'); }} onDelete={idx => setArchives(prev => prev.filter((_, i) => i !== idx))} onImport={() => fileInputRef.current?.click()} />}
 
         <input
           type="file"
@@ -634,7 +722,8 @@ const App: React.FC = () => {
             reader.onload = (ev) => {
               try {
                 const data = JSON.parse(ev.target!.result as string);
-                setProject({ ...DEFAULT_PROJECT, ...data, assets: {} });
+                clearAssetsFromIDB().catch(() => {});
+                setProject(migrateProject(data));
                 setView('dashboard');
               } catch {
                 addLog('Project import failed: invalid JSON.', 'error');
@@ -866,9 +955,9 @@ const App: React.FC = () => {
                     </button>
                   </div>
 
-                  {youtubeMetadata && (
+                  {project.youtubeMetadata && (
                     <YouTubeOptimizer
-                      metadata={youtubeMetadata}
+                      metadata={project.youtubeMetadata}
                       script={project.script}
                       characters={project.characters}
                       globalStyle={project.globalStyle || "Cinematic"}
@@ -961,7 +1050,7 @@ const App: React.FC = () => {
       {project.activeDraft && <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />}
       {showPlayer && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => setShowPlayer(false)} />}
       {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} onCancel={() => setShowRenderer(false)} onComplete={() => { }} />}
-      {showManifest && <ProductionManifest project={project} youtubeMetadata={youtubeMetadata} onClose={() => setShowManifest(false)} />}
+      {showManifest && <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata ?? null} onClose={() => setShowManifest(false)} />}
 
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} onCancel={handleCancelBatch} isCancelling={isCancellingBatch} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
