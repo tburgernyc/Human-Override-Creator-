@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, Modality, HarmCategory, HarmBlockThreshold, GenerateContentResponse, FunctionDeclaration, LiveServerMessage } from "@google/genai";
-import { MODEL_NAMES, VOICE_PRESETS, VoicePreset } from "../constants";
+import { MODEL_NAMES, VOICE_PRESETS, VoicePreset, MUSIC_TRACKS } from "../constants";
 import { Character, Scene, DialogueLine, AspectRatio, Resolution, ProjectState, ProductionTask, ProjectModules, ViralPotential, DirectorDraft } from "../types";
 
 const cleanJsonResponse = (text: string): string => {
@@ -374,6 +374,10 @@ export const analyzeScript = async (script: string, seed?: number): Promise<{
             visualPrompt: { type: Type.STRING },
             charactersInScene: { type: Type.ARRAY, items: { type: Type.STRING } },
             musicMood: { type: Type.STRING, enum: ['suspense', 'action', 'calm', 'cheerful', 'melancholic'] },
+            // Optional pin to a specific track id within the mood pool (Q3).
+            // Listing every legal id as the enum lets the model name a track
+            // when one fits the scene's energy better than a random pick.
+            musicTrackId: { type: Type.STRING, enum: Object.values(MUSIC_TRACKS).flat().map(t => t.id) },
             narratorLines: {
               type: Type.ARRAY,
               items: {

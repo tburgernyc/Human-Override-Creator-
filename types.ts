@@ -51,6 +51,10 @@ export interface Scene {
   narratorLines: DialogueLine[];
   estimatedDuration: number;
   musicMood: 'suspense' | 'action' | 'calm' | 'cheerful' | 'melancholic';
+  // Optional pin to a specific track id (Q3). When set and the id exists in
+  // the mood's pool, the renderer plays that track; otherwise it falls back
+  // to a deterministic hash of sceneId into the pool.
+  musicTrackId?: string;
   ambientSfx?: 'none' | 'rain' | 'city_hum' | 'wind' | 'space_drone' | 'data_stream';
   sfxVolume?: number; // 0-100
   textOverlay?: TextOverlay;

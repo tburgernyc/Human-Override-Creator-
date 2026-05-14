@@ -2,7 +2,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Scene, GeneratedAssets, DialogueLine, TextOverlay, Character, TransitionType, CameraMotion, AssetHistoryItem } from '../types';
 import { decodeAudio, optimizeVisualPrompt } from '../services/gemini';
-import { MUSIC_TRACKS } from '../constants';
 
 interface SceneCardProps {
   scene: Scene;

@@ -44,7 +44,7 @@ import {
   extendSceneVideo
 } from './services/gemini';
 import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
-import { saveAssets as saveAssetsToIDB, loadAssets as loadAssetsFromIDB, clearAssets as clearAssetsFromIDB } from './services/assetStore';
+import { saveAssets as saveAssetsToIDB, loadAssets as loadAssetsFromIDB, clearAssets as clearAssetsFromIDB, saveLog as saveLogToIDB, loadLog as loadLogFromIDB } from './services/assetStore';
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v7';
 const ALL_PROJECTS_KEY = 'human_override_archives_v5';
@@ -223,16 +223,28 @@ const App: React.FC = () => {
   // bucket back over the loaded data during the brief window between switch and
   // IDB read completing.
   const assetsLoadingRef = useRef(false);
+  const logLoadingRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
     assetsLoadingRef.current = true;
+    logLoadingRef.current = true;
     (async () => {
-      const stored = await loadAssetsFromIDB(project.projectId);
-      if (cancelled) { assetsLoadingRef.current = false; return; }
-      if (stored) {
-        setProject(prev => {
-          // Guard against stale loads if the user switched projects mid-load.
-          if (prev.projectId !== project.projectId) return prev;
+      // Load assets and log in parallel — they hit the same IDB store but
+      // separate keys, so concurrent transactions don't conflict (R5).
+      const [stored, storedLog] = await Promise.all([
+        loadAssetsFromIDB(project.projectId),
+        loadLogFromIDB(project.projectId),
+      ]);
+      if (cancelled) {
+        assetsLoadingRef.current = false;
+        logLoadingRef.current = false;
+        return;
+      }
+      setProject(prev => {
+        // Guard against stale loads if the user switched projects mid-load.
+        if (prev.projectId !== project.projectId) return prev;
+        const next = { ...prev };
+        if (stored) {
           // Only restore assets for scenes we actually still have. Stale entries
           // for deleted scenes get dropped here.
           const validSceneIds = new Set(prev.scenes.map(s => s.id));
@@ -240,21 +252,30 @@ const App: React.FC = () => {
           for (const [sceneId, asset] of Object.entries(stored)) {
             if (validSceneIds.has(sceneId)) filtered[sceneId] = asset;
           }
-          return { ...prev, assets: filtered };
-        });
-      }
+          next.assets = filtered;
+        }
+        if (storedLog && storedLog.length > 0) {
+          // The persisted log is authoritative — pre-R5 saves may have left a
+          // shorter copy in localStorage that we don't want to merge with.
+          next.productionLog = storedLog;
+        }
+        return next;
+      });
       assetsLoadingRef.current = false;
+      logLoadingRef.current = false;
     })();
     return () => { cancelled = true; };
   }, [project.projectId]);
 
   useEffect(() => {
-    // Debounce saves and strip binary assets from localStorage. Assets persist
-    // separately to IndexedDB (see effect below) so refresh restores them.
+    // Debounce saves and strip binary assets + productionLog from localStorage.
+    // Assets persist to IndexedDB (see effect below); productionLog persists to
+    // IDB too (R5) — keeping a 500-entry log in localStorage on every keystroke
+    // would burn through quota and slow saves.
     setSaveState(s => (s === 'error' ? s : 'saving'));
     const timer = setTimeout(() => {
       try {
-        const { assets: _stripped, ...persistable } = project;
+        const { assets: _strippedAssets, productionLog: _strippedLog, ...persistable } = project;
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(persistable));
         setSaveState(s => (s === 'error' ? s : 'saved'));
       } catch (e: any) {
@@ -300,6 +321,18 @@ const App: React.FC = () => {
     const t = setTimeout(() => setSaveState(s => (s === 'saved' ? 'idle' : s)), 2000);
     return () => clearTimeout(t);
   }, [saveState]);
+
+  // Persist the production log to IDB on a separate debounce from assets (R5).
+  // Logs change far more often than assets (every UI action emits one), and a
+  // 2s debounce keeps the IO rate flat without losing more than the latest
+  // few entries on tab close.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (logLoadingRef.current) return;
+      saveLogToIDB(project.projectId, project.productionLog).catch(e => console.warn('Log persist failed:', e));
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [project.productionLog, project.projectId]);
 
   useEffect(() => {
     localStorage.setItem(ALL_PROJECTS_KEY, JSON.stringify(archives));
@@ -363,9 +396,13 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handler);
   }, [project.scenes]);
 
+  // Bumped from 50 → 500 entries (R5). The log is now persisted to IDB so it
+  // survives refreshes; capping at 500 keeps memory bounded for very long
+  // sessions while preserving meaningful history.
+  const PRODUCTION_LOG_CAP = 500;
   const addLog = (message: string, type: LogEntry['type'] = 'system', actionLabel?: string, actionId?: string, actionParams?: any) => {
     const newEntry: LogEntry = { id: Date.now().toString(), timestamp: Date.now(), type, message, actionLabel, actionId, actionParams };
-    setProject(p => ({ ...p, productionLog: [newEntry, ...p.productionLog].slice(0, 50) }));
+    setProject(p => ({ ...p, productionLog: [newEntry, ...p.productionLog].slice(0, PRODUCTION_LOG_CAP) }));
     // Surface error and success entries as toasts so users see them without opening the assistant panel.
     if (type === 'error' || type === 'success') {
       const toast: ToastItem = {
@@ -1238,7 +1275,7 @@ const App: React.FC = () => {
       {showMastering && <VFXMaster mastering={project.mastering} cinematicProfile={project.cinematicProfile} onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))} onClose={() => setShowMastering(false)} />}
       {project.activeDraft && <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />}
       {showPlayer && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => setShowPlayer(false)} />}
-      {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} onCancel={() => setShowRenderer(false)} onComplete={() => { }} />}
+      {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} onCancel={() => setShowRenderer(false)} onComplete={() => { }} onLog={addLog} />}
       {showManifest && <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata ?? null} onClose={() => setShowManifest(false)} />}
 
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} onCancel={handleCancelBatch} isCancelling={isCancellingBatch} />

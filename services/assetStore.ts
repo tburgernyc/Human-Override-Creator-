@@ -7,15 +7,17 @@
 // stomp each other, and so loading an archive doesn't ambiguously share the
 // same 'active' bucket. The legacy 'active' key is auto-migrated on first read.
 
-import type { GeneratedAssets } from '../types';
+import type { GeneratedAssets, LogEntry } from '../types';
 
 const DB_NAME = 'human-override-creator';
 const STORE_NAME = 'active-assets';
 const LEGACY_RECORD_KEY = 'active';
 const RECORD_KEY_PREFIX = 'proj_';
+const LOG_KEY_PREFIX = 'log_';
 const DB_VERSION = 1;
 
 const recordKey = (projectId: string) => `${RECORD_KEY_PREFIX}${projectId}`;
+const logKey = (projectId: string) => `${LOG_KEY_PREFIX}${projectId}`;
 
 const supportsIDB = (): boolean => typeof indexedDB !== 'undefined';
 
@@ -117,6 +119,67 @@ export const clearAssets = async (projectId: string): Promise<void> => {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       tx.objectStore(STORE_NAME).delete(recordKey(projectId));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+  db.close();
+};
+
+// Production-log persistence (R5). The log lives in the same object store as
+// assets under a `log_` prefix — keeps the schema flat and avoids a DB_VERSION
+// bump. Errors are swallowed: log persistence is best-effort and never blocks
+// the UI. Save failures are surfaced via the existing asset-persistence toast
+// path indirectly (writes happen on similar cadence).
+
+export const saveLog = async (projectId: string, log: LogEntry[]): Promise<void> => {
+  if (!projectId) return;
+  const db = await openDB();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put(log, logKey(projectId));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => { console.warn('IDB log save failed:', tx.error); resolve(); };
+      tx.onabort = () => { console.warn('IDB log save aborted:', tx.error); resolve(); };
+    } catch (e) {
+      console.warn('IDB log save threw:', e);
+      resolve();
+    }
+  });
+  db.close();
+};
+
+export const loadLog = async (projectId: string): Promise<LogEntry[] | null> => {
+  if (!projectId) return null;
+  const db = await openDB();
+  if (!db) return null;
+  const result = await new Promise<LogEntry[] | null>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).get(logKey(projectId));
+      req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : null);
+      req.onerror = () => { console.warn('IDB log load failed:', req.error); resolve(null); };
+    } catch (e) {
+      console.warn('IDB log load threw:', e);
+      resolve(null);
+    }
+  });
+  db.close();
+  return result;
+};
+
+export const clearLog = async (projectId: string): Promise<void> => {
+  if (!projectId) return;
+  const db = await openDB();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete(logKey(projectId));
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     } catch {

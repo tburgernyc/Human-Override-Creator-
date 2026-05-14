@@ -1,8 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Scene, GeneratedAssets, Resolution, AspectRatio, TextOverlay, ProjectState, TransitionType, CameraMotion, ColorGrade } from '../types';
+import { Scene, GeneratedAssets, Resolution, AspectRatio, TextOverlay, ProjectState, TransitionType, CameraMotion, ColorGrade, LogEntry } from '../types';
 import { decodeAudio } from '../services/gemini';
-import { MUSIC_TRACKS } from '../constants';
+import { pickMusicTrack, MusicMood } from '../constants';
 
 // Free ambient SFX from Wikimedia Commons (no auth required)
 const AMBIENT_TRACKS: Record<string, string> = {
@@ -165,11 +165,19 @@ interface RendererProps {
     cinematicProfile?: ProjectState['cinematicProfile'];
     onComplete: (url: string) => void;
     onCancel: () => void;
+    // Surface non-fatal warnings (music fetch/decode failures, etc.) up to App
+    // so they appear in the productionLog + toast system instead of being
+    // swallowed silently like the pre-Q3 broken music URLs were.
+    onLog?: (message: string, type: LogEntry['type']) => void;
 }
 
 type RenderState = 'initializing' | 'rendering' | 'validating' | 'complete' | 'error';
 
-export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, aspectRatio, globalStyle, mastering, cinematicProfile = 'natural', onComplete, onCancel }) => {
+export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, aspectRatio, globalStyle, mastering, cinematicProfile = 'natural', onComplete, onCancel, onLog }) => {
+    // Keep onLog stable across renders so we don't restart the render effect
+    // every time the parent re-creates the closure.
+    const onLogRef = useRef(onLog);
+    useEffect(() => { onLogRef.current = onLog; }, [onLog]);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [renderState, setRenderState] = useState<RenderState>('initializing');
     const [statusMessage, setStatusMessage] = useState("Initializing Pipeline...");
@@ -488,7 +496,9 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         let activeAmbient: { source: AudioBufferSourceNode; crossfadeGain: GainNode } | null = null;
         let bgMusicGain: GainNode | null = null;
         let ambientGain: GainNode | null = null;
-        let currentMusicMood: string | null = null;
+        // Tracked by track id (Q3) instead of mood so a mood that has multiple
+        // tracks can crossfade between them across scenes.
+        let currentMusicTrackId: string | null = null;
         let currentAmbientTrack: string | null = null;
         const MUSIC_CROSSFADE_SEC = 1.0;
         const AMBIENT_CROSSFADE_SEC = 1.5;
@@ -692,46 +702,49 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     activeAmbient.crossfadeGain.gain.linearRampToValueAtTime(sfxMultiplier, t + 0.3);
                 }
 
-                // Music track (per-scene mood) — fade between tracks instead of hard-cutting.
-                if (scene.musicMood && scene.musicMood !== currentMusicMood && audioCtx && bgMusicGain) {
-                    const url = (MUSIC_TRACKS as any)[scene.musicMood];
-                    if (url) {
-                        try {
-                            let buf = musicBufferCache.get(scene.musicMood);
-                            if (!buf) {
-                                const resp = await fetch(url);
-                                const ab = await resp.arrayBuffer();
-                                buf = await audioCtx.decodeAudioData(ab);
-                                musicBufferCache.set(scene.musicMood, buf);
-                            }
-
-                            const now = audioCtx.currentTime;
-
-                            // Fade out the currently-playing track, then stop it after the fade tail.
-                            if (activeMusic) {
-                                const { source: oldSrc, crossfadeGain: oldGain } = activeMusic;
-                                oldGain.gain.cancelScheduledValues(now);
-                                oldGain.gain.setValueAtTime(oldGain.gain.value, now);
-                                oldGain.gain.linearRampToValueAtTime(0, now + MUSIC_CROSSFADE_SEC);
-                                setTimeout(() => { try { oldSrc.stop(); } catch (e) { /* already stopped */ } }, (MUSIC_CROSSFADE_SEC + 0.05) * 1000);
-                            }
-
-                            // Fade in the new track from silent up to full crossfade gain.
-                            const newGain = audioCtx.createGain();
-                            newGain.gain.value = 0;
-                            newGain.connect(bgMusicGain);
-                            const newSrc = audioCtx.createBufferSource();
-                            newSrc.buffer = buf;
-                            newSrc.loop = true;
-                            newSrc.connect(newGain);
-                            newSrc.start(0);
-                            newGain.gain.linearRampToValueAtTime(1, now + MUSIC_CROSSFADE_SEC);
-
-                            activeMusic = { source: newSrc, crossfadeGain: newGain };
-                            currentMusicMood = scene.musicMood;
-                        } catch (e) {
-                            console.error('Music track failed:', e);
+                // Music track (per-scene mood + optional track pin) — fade between
+                // tracks instead of hard-cutting. Tracks are picked from a per-mood
+                // pool (Q3) so a long project doesn't loop the same clip every scene.
+                const chosenTrack = scene.musicMood ? pickMusicTrack(scene.musicMood as MusicMood, scene.musicTrackId, scene.id) : undefined;
+                if (chosenTrack && chosenTrack.id !== currentMusicTrackId && audioCtx && bgMusicGain) {
+                    try {
+                        let buf = musicBufferCache.get(chosenTrack.id);
+                        if (!buf) {
+                            const resp = await fetch(chosenTrack.url);
+                            if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+                            const ab = await resp.arrayBuffer();
+                            buf = await audioCtx.decodeAudioData(ab);
+                            musicBufferCache.set(chosenTrack.id, buf);
                         }
+
+                        const now = audioCtx.currentTime;
+
+                        // Fade out the currently-playing track, then stop it after the fade tail.
+                        if (activeMusic) {
+                            const { source: oldSrc, crossfadeGain: oldGain } = activeMusic;
+                            oldGain.gain.cancelScheduledValues(now);
+                            oldGain.gain.setValueAtTime(oldGain.gain.value, now);
+                            oldGain.gain.linearRampToValueAtTime(0, now + MUSIC_CROSSFADE_SEC);
+                            setTimeout(() => { try { oldSrc.stop(); } catch (e) { /* already stopped */ } }, (MUSIC_CROSSFADE_SEC + 0.05) * 1000);
+                        }
+
+                        // Fade in the new track from silent up to full crossfade gain.
+                        const newGain = audioCtx.createGain();
+                        newGain.gain.value = 0;
+                        newGain.connect(bgMusicGain);
+                        const newSrc = audioCtx.createBufferSource();
+                        newSrc.buffer = buf;
+                        newSrc.loop = true;
+                        newSrc.connect(newGain);
+                        newSrc.start(0);
+                        newGain.gain.linearRampToValueAtTime(1, now + MUSIC_CROSSFADE_SEC);
+
+                        activeMusic = { source: newSrc, crossfadeGain: newGain };
+                        currentMusicTrackId = chosenTrack.id;
+                    } catch (e) {
+                        const msg = e instanceof Error ? e.message : String(e);
+                        console.error(`Music track "${chosenTrack.title}" failed:`, e);
+                        onLogRef.current?.(`Music track "${chosenTrack.title}" failed to load (${msg}); scene will render without it.`, 'error');
                     }
                 }
 

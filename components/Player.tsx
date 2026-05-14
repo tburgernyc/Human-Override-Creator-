@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Scene, GeneratedAssets, ProjectState } from '../types';
 import { decodeAudio } from '../services/gemini';
-import { MUSIC_TRACKS } from '../constants';
+import { pickMusicTrack, MusicMood } from '../constants';
 
 interface PlayerProps {
     scenes: Scene[];
@@ -107,26 +107,28 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
             bgMusicGainRef.current.gain.value = (mastering?.musicVolume ?? 15) / 100;
         }
 
-        if (scene.musicMood !== currentMoodRef.current) {
+        // Music track picked from the per-mood pool (Q3). currentMoodRef now
+        // tracks the chosen track id rather than the mood string, so a mood
+        // pool with multiple tracks crossfades between them across scenes.
+        const chosenTrack = scene.musicMood ? pickMusicTrack(scene.musicMood as MusicMood, scene.musicTrackId, scene.id) : undefined;
+        if (chosenTrack && chosenTrack.id !== currentMoodRef.current) {
             if (bgMusicSourceRef.current) {
                 try { bgMusicSourceRef.current.stop(); } catch (e) { }
             }
-            const url = (MUSIC_TRACKS as any)[scene.musicMood];
-            if (url) {
-                try {
-                    const resp = await fetch(url);
-                    const ab = await resp.arrayBuffer();
-                    const buffer = await audioCtxRef.current.decodeAudioData(ab);
-                    const source = audioCtxRef.current.createBufferSource();
-                    source.buffer = buffer;
-                    source.loop = true;
-                    source.connect(bgMusicGainRef.current!);
-                    source.start(0);
-                    bgMusicSourceRef.current = source;
-                    currentMoodRef.current = scene.musicMood;
-                } catch (e) {
-                    console.error("BG music failed", e);
-                }
+            try {
+                const resp = await fetch(chosenTrack.url);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+                const ab = await resp.arrayBuffer();
+                const buffer = await audioCtxRef.current.decodeAudioData(ab);
+                const source = audioCtxRef.current.createBufferSource();
+                source.buffer = buffer;
+                source.loop = true;
+                source.connect(bgMusicGainRef.current!);
+                source.start(0);
+                bgMusicSourceRef.current = source;
+                currentMoodRef.current = chosenTrack.id;
+            } catch (e) {
+                console.error(`Player: music track "${chosenTrack.title}" failed`, e);
             }
         }
 
