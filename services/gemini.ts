@@ -578,7 +578,11 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
 // one call. Above this we fall back to per-line single-speaker stitching.
 const MULTI_SPEAKER_LIMIT = 5;
 const TTS_SAMPLE_RATE = 24000;
-const INTER_LINE_SILENCE_MS = 150;
+// Same-speaker monologues used to feel choppy because we inserted a uniform
+// 150 ms gap between every line. Real cadence is shorter within a thought and
+// longer when the speaker changes. (B9)
+const SAME_SPEAKER_SILENCE_MS = 50;
+const DIFFERENT_SPEAKER_SILENCE_MS = 200;
 
 // Returns a Uint8Array of 16-bit PCM silence at the TTS sample rate. Used to
 // pad between concatenated single-speaker lines so they don't slam together.
@@ -594,7 +598,26 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
   // Multi-speaker path: one call handles 2..N distinct voices with shared
   // acoustic context. Better-sounding than stitched single-speaker output.
   if (speakersInScene.length >= 2 && speakersInScene.length <= MULTI_SPEAKER_LIMIT) {
-    const prompt = `TTS the following conversation:\n${lines.map(l => `${l.speaker}: ${l.text}`).join('\n')}`;
+    // Wrap each line in <prosody> when the speaker has non-default voice
+    // settings, so the per-character speed/pitch sliders in CharacterModal
+    // actually take effect in multi-speaker scenes (B2). Previously these were
+    // only applied in the single-speaker fallback path. Plain lines (no
+    // overrides) are emitted as-is so the speaker label detection isn't
+    // disturbed for the common case.
+    const hasProsody = (c?: Character) =>
+      (c?.voiceSettings?.speed ?? 1) !== 1 || (c?.voiceSettings?.pitch ?? 0) !== 0;
+    const lineToPrompt = (l: DialogueLine): string => {
+      const char = characters.find(c => c.name === l.speaker);
+      if (!hasProsody(char)) return `${l.speaker}: ${l.text}`;
+      const rate = char!.voiceSettings!.speed ?? 1;
+      const pitch = char!.voiceSettings!.pitch ?? 0;
+      return `${l.speaker}: <prosody rate="${rate}" pitch="${pitch}st">${l.text}</prosody>`;
+    };
+    const anyProsody = lines.some(l => hasProsody(characters.find(c => c.name === l.speaker)));
+    const body = lines.map(lineToPrompt).join('\n');
+    const prompt = anyProsody
+      ? `TTS the following conversation:\n<speak>${body}</speak>`
+      : `TTS the following conversation:\n${body}`;
     const speakerConfigs = speakersInScene.map(name => {
       const char = characters.find(c => c.name === name);
       const preset = VOICE_PRESETS.find(p => p.id === char?.voiceId) || VOICE_PRESETS[0];
@@ -645,12 +668,18 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
     })
   );
 
-  const silence = makeSilence(INTER_LINE_SILENCE_MS);
+  const sameSpeakerSilence = makeSilence(SAME_SPEAKER_SILENCE_MS);
+  const speakerChangeSilence = makeSilence(DIFFERENT_SPEAKER_SILENCE_MS);
   const parts: Uint8Array[] = [];
+  let lastAppendedSpeaker: string | null = null;
   settled.forEach((r, i) => {
     if (r.status === 'fulfilled' && r.value) {
-      if (parts.length > 0) parts.push(silence); // gap between lines
+      const speaker = filteredLines[i].speaker;
+      if (parts.length > 0) {
+        parts.push(speaker === lastAppendedSpeaker ? sameSpeakerSilence : speakerChangeSilence);
+      }
       parts.push(r.value);
+      lastAppendedSpeaker = speaker;
     } else if (r.status === 'rejected') {
       console.error(`TTS line ${i} failed:`, r.reason);
     }

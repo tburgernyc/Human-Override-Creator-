@@ -39,6 +39,57 @@ const computeBitrate = (w: number, h: number, fps: number): number => {
     return Math.max(2_000_000, Math.min(20_000_000, raw));
 };
 
+// Loudness normalization (Q2). YouTube/Spotify target -14 LUFS; -18 dBFS RMS
+// is a reasonable speech-only proxy that leaves the master compressor headroom
+// to catch transients without smashing dialog. Real ITU-R BS.1770 K-weighting
+// is heavier than this app needs; an integrated RMS over all TTS speech, with
+// gain clamping, hits the right ballpark for tone-controlled voiceover.
+const TARGET_SPEECH_RMS_DBFS = -18;
+const MIN_NORM_GAIN = 0.5; // -6 dB — don't ever cut TTS more than this
+const MAX_NORM_GAIN = 3.0; // +9.5 dB — don't boost noise floor on near-silent input
+
+const computeIntegratedRms = (buffers: AudioBuffer[]): number => {
+    let sumSq = 0;
+    let count = 0;
+    for (const buf of buffers) {
+        const channel = buf.getChannelData(0);
+        for (let i = 0; i < channel.length; i++) {
+            sumSq += channel[i] * channel[i];
+            count++;
+        }
+    }
+    return count > 0 ? Math.sqrt(sumSq / count) : 0;
+};
+
+const computeNormalizationGain = (buffers: AudioBuffer[]): number => {
+    const rms = computeIntegratedRms(buffers);
+    if (rms <= 1e-6) return 1; // silent — nothing to normalize
+    const currentDbfs = 20 * Math.log10(rms);
+    const desiredGainDb = TARGET_SPEECH_RMS_DBFS - currentDbfs;
+    const linear = Math.pow(10, desiredGainDb / 20);
+    return Math.max(MIN_NORM_GAIN, Math.min(MAX_NORM_GAIN, linear));
+};
+
+// Procedural small-room impulse response for the voice bus reverb (Q5).
+// Bundling a real IR file would be ideal but adds asset weight; this decaying-
+// noise approximation is good enough to take the dry edge off TTS.
+const createRoomImpulse = (ctx: AudioContext, durationSec = 0.35, decay = 3.5): AudioBuffer => {
+    const length = Math.floor(ctx.sampleRate * durationSec);
+    const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+        const data = impulse.getChannelData(c);
+        for (let i = 0; i < length; i++) {
+            data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+        }
+    }
+    return impulse;
+};
+
+// Wet/dry split for the voice convolver. Subtle by design — we want to take
+// the cardboard-box edge off dry TTS, not paint everything cavernous.
+const VOICE_REVERB_WET = 0.18;
+const VOICE_REVERB_DRY = 1 - VOICE_REVERB_WET;
+
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, Math.max(0, ms)));
 
 // Load an image or video with a hard timeout so a missing asset can't hang
@@ -91,6 +142,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     const masteringRef = useRef(mastering);
     const cinematicProfileRef = useRef(cinematicProfile);
     const bgMusicGainRef = useRef<GainNode | null>(null);
+    const ambientGainRef = useRef<GainNode | null>(null);
     const voiceGainRefs = useRef<Set<GainNode>>(new Set());
     useEffect(() => { masteringRef.current = mastering; }, [mastering]);
     useEffect(() => { cinematicProfileRef.current = cinematicProfile; }, [cinematicProfile]);
@@ -102,6 +154,11 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         if (!g) return;
         try { g.gain.cancelScheduledValues(0); g.gain.setValueAtTime((mastering?.musicVolume ?? 15) / 100, 0); } catch (e) { /* node detached */ }
     }, [mastering?.musicVolume]);
+    useEffect(() => {
+        const g = ambientGainRef.current;
+        if (!g) return;
+        try { g.gain.cancelScheduledValues(0); g.gain.setValueAtTime((mastering?.ambientVolume ?? 30) / 100, 0); } catch (e) { /* node detached */ }
+    }, [mastering?.ambientVolume]);
     useEffect(() => {
         const v = (mastering?.voiceVolume ?? 100) / 100;
         voiceGainRefs.current.forEach(g => { try { g.gain.setValueAtTime(v, 0); } catch (e) { /* node detached */ } });
@@ -326,13 +383,21 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         // Decoded music buffers cached by mood key so a mood that repeats does
         // not re-download and re-decode the same track.
         const musicBufferCache = new Map<string, AudioBuffer>();
+        // Ambient SFX cache mirrors music cache. The renderer used to define
+        // AMBIENT_TRACKS but never reference it (B1) — wiring the same crossfade
+        // bus pattern lets the per-scene ambientSfx field actually do something.
+        const ambientBufferCache = new Map<string, AudioBuffer>();
         // Currently-playing music source plus its dedicated crossfade gain node
         // (per-track), letting two tracks overlap during a transition. The shared
         // bgMusicGain handles overall volume + sidechain ducking.
         let activeMusic: { source: AudioBufferSourceNode; crossfadeGain: GainNode } | null = null;
+        let activeAmbient: { source: AudioBufferSourceNode; crossfadeGain: GainNode } | null = null;
         let bgMusicGain: GainNode | null = null;
+        let ambientGain: GainNode | null = null;
         let currentMusicMood: string | null = null;
+        let currentAmbientTrack: string | null = null;
         const MUSIC_CROSSFADE_SEC = 1.0;
+        const AMBIENT_CROSSFADE_SEC = 1.5;
 
         const startRendering = async () => {
             if (!canvasRef.current) return;
@@ -344,7 +409,11 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 return;
             }
 
-            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+            // 48kHz is the video-standard output rate. TTS at 24kHz upsamples
+            // cleanly through Web Audio's resampler; 44.1kHz Wikimedia music
+            // tracks keep their full bandwidth instead of being downsampled to
+            // the TTS native rate as they were under the old 24kHz context (B3).
+            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
             const canvas = canvasRef.current;
             const ctx = canvas.getContext('2d', { alpha: false })!;
             const stream = canvas.captureStream(TARGET_FPS);
@@ -371,6 +440,34 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             bgMusicGain.connect(masterCompressor);
             bgMusicGainRef.current = bgMusicGain;
 
+            // Ambient SFX bus parallel to music. Per-scene ambientSfx routes
+            // through this gain so the mastering panel's ambientVolume slider
+            // works as a single hose for all ambient tracks.
+            const ambientBusValue = (mastering?.ambientVolume ?? 30) / 100;
+            ambientGain = audioCtx.createGain();
+            ambientGain.gain.value = ambientBusValue;
+            ambientGain.connect(masterCompressor);
+            ambientGainRef.current = ambientGain;
+
+            // Voice bus carries the speech normalization gain (Q2). Per-line voice
+            // gains chain through this, so the live voiceVolume slider can keep
+            // writing to the per-line gain without clobbering the normalization.
+            const voiceBusGain = audioCtx.createGain();
+            // Default 1.0; replaced after the pre-decode/measurement pass below.
+            voiceBusGain.gain.value = 1;
+
+            // Voice bus splits into a dry path and a convolver-reverb wet path,
+            // then both re-converge into the master compressor (Q5). Without the
+            // reverb, TTS sounds glued-on-top-of-music — dry and unnatural.
+            const voiceReverb = audioCtx.createConvolver();
+            voiceReverb.buffer = createRoomImpulse(audioCtx);
+            const voiceDryGain = audioCtx.createGain();
+            voiceDryGain.gain.value = VOICE_REVERB_DRY;
+            const voiceWetGain = audioCtx.createGain();
+            voiceWetGain.gain.value = VOICE_REVERB_WET;
+            voiceBusGain.connect(voiceDryGain).connect(masterCompressor);
+            voiceBusGain.connect(voiceReverb).connect(voiceWetGain).connect(masterCompressor);
+
             const bitrate = computeBitrate(width, height, TARGET_FPS);
             const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: bitrate });
             recorder.ondataavailable = e => chunks.push(e.data);
@@ -381,6 +478,27 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 setRenderState('complete');
                 onComplete(url);
             };
+            // Pre-decode every scene's TTS once so we can (a) measure integrated
+            // loudness across the whole program, and (b) avoid re-decoding inside
+            // the render loop. The normalization gain found here gets multiplied
+            // into each voice gain node below.
+            setStatusMessage('Measuring loudness…');
+            const preDecoded = new Map<string, AudioBuffer>();
+            for (const s of scenes) {
+                if (isCancelled) return;
+                const a = assets[s.id];
+                if (!a?.audioUrl || !audioCtx) continue;
+                try {
+                    const audioBase64 = a.audioUrl.includes(',') ? a.audioUrl.split(',')[1] : a.audioUrl;
+                    preDecoded.set(s.id, await decodeAudio(audioBase64, audioCtx));
+                } catch (e) {
+                    console.warn(`Pre-decode failed for scene ${s.id}:`, e);
+                }
+            }
+            const speechNormalizationGain = computeNormalizationGain([...preDecoded.values()]);
+            voiceBusGain.gain.value = speechNormalizationGain;
+            console.log(`[Renderer] Speech normalization gain: ${speechNormalizationGain.toFixed(3)} (target ${TARGET_SPEECH_RMS_DBFS} dBFS)`);
+
             recorder.start();
             setRenderState('rendering');
 
@@ -402,12 +520,12 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 }
                 const sceneWallStart = performance.now();
 
-                // Pre-decode TTS so we can extend the scene to hold the full line
-                // instead of truncating dialogue mid-sentence. This is the central
-                // audio-quality fix from the audit: previously source.start(0, 0,
-                // durationSec) cut off any audio longer than the planned scene length.
-                let audioBuffer: AudioBuffer | null = null;
-                if (asset?.audioUrl && audioCtx) {
+                // TTS was pre-decoded above for loudness measurement (Q2). Falling
+                // back to a fresh decode keeps the render going if a scene appeared
+                // after the pre-decode pass (race-safe, though not currently
+                // reachable since scenes are immutable for the render duration).
+                let audioBuffer: AudioBuffer | null = preDecoded.get(scene.id) ?? null;
+                if (!audioBuffer && asset?.audioUrl && audioCtx) {
                     try {
                         const audioBase64 = asset.audioUrl.includes(',') ? asset.audioUrl.split(',')[1] : asset.audioUrl;
                         audioBuffer = await decodeAudio(audioBase64, audioCtx);
@@ -422,6 +540,56 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 const durationSec = Math.max(baseDurationSec, audioDurationSec + AUDIO_TAIL_SEC);
                 const durationMs = durationSec * 1000;
                 const sceneStart = performance.now();
+
+                // Ambient SFX (per-scene track) — same crossfade pattern as music.
+                // Empty/'none' fades out the active ambient without bringing a new one in.
+                const sceneAmbient = scene.ambientSfx && scene.ambientSfx !== 'none' ? scene.ambientSfx : null;
+                if (sceneAmbient !== currentAmbientTrack && audioCtx && ambientGain) {
+                    const now = audioCtx.currentTime;
+                    if (activeAmbient) {
+                        const { source: oldSrc, crossfadeGain: oldGain } = activeAmbient;
+                        oldGain.gain.cancelScheduledValues(now);
+                        oldGain.gain.setValueAtTime(oldGain.gain.value, now);
+                        oldGain.gain.linearRampToValueAtTime(0, now + AMBIENT_CROSSFADE_SEC);
+                        setTimeout(() => { try { oldSrc.stop(); } catch (e) { /* already stopped */ } }, (AMBIENT_CROSSFADE_SEC + 0.05) * 1000);
+                        activeAmbient = null;
+                    }
+                    if (sceneAmbient) {
+                        const url = AMBIENT_TRACKS[sceneAmbient];
+                        if (url) {
+                            try {
+                                let buf = ambientBufferCache.get(sceneAmbient);
+                                if (!buf) {
+                                    const resp = await fetch(url);
+                                    const ab = await resp.arrayBuffer();
+                                    buf = await audioCtx.decodeAudioData(ab);
+                                    ambientBufferCache.set(sceneAmbient, buf);
+                                }
+                                const sfxMultiplier = ((scene.sfxVolume ?? 100) / 100);
+                                const targetGain = Math.max(0, Math.min(1, sfxMultiplier));
+                                const newGain = audioCtx.createGain();
+                                newGain.gain.value = 0;
+                                newGain.connect(ambientGain);
+                                const newSrc = audioCtx.createBufferSource();
+                                newSrc.buffer = buf;
+                                newSrc.loop = true;
+                                newSrc.connect(newGain);
+                                newSrc.start(0);
+                                newGain.gain.linearRampToValueAtTime(targetGain, now + AMBIENT_CROSSFADE_SEC);
+                                activeAmbient = { source: newSrc, crossfadeGain: newGain };
+                            } catch (e) {
+                                console.error('Ambient SFX failed:', e);
+                            }
+                        }
+                    }
+                    currentAmbientTrack = sceneAmbient;
+                } else if (sceneAmbient && activeAmbient && audioCtx) {
+                    // Same ambient track continues, but a per-scene sfxVolume change should still apply.
+                    const sfxMultiplier = Math.max(0, Math.min(1, (scene.sfxVolume ?? 100) / 100));
+                    const t = audioCtx.currentTime;
+                    activeAmbient.crossfadeGain.gain.cancelScheduledValues(t);
+                    activeAmbient.crossfadeGain.gain.linearRampToValueAtTime(sfxMultiplier, t + 0.3);
+                }
 
                 // Music track (per-scene mood) — fade between tracks instead of hard-cutting.
                 if (scene.musicMood && scene.musicMood !== currentMusicMood && audioCtx && bgMusicGain) {
@@ -467,13 +635,15 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 }
 
                 // Start the pre-decoded TTS buffer at full length — the scene
-                // duration was already extended above to accommodate it.
+                // duration was already extended above to accommodate it. Per-line
+                // gain holds the user-facing voiceVolume; voiceBusGain (above)
+                // holds the Q2 normalization factor so they compose cleanly.
                 if (audioBuffer && audioCtx) {
                     const source = audioCtx.createBufferSource();
                     const gain = audioCtx.createGain();
                     gain.gain.value = (masteringRef.current?.voiceVolume ?? 100) / 100;
                     source.connect(gain);
-                    gain.connect(masterCompressor);
+                    gain.connect(voiceBusGain);
                     source.buffer = audioBuffer;
                     source.start(0);
                     activeSources.push(source);
@@ -567,6 +737,10 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 try { activeMusic.source.stop(); } catch (e) { /* already stopped */ }
                 activeMusic = null;
             }
+            if (activeAmbient) {
+                try { activeAmbient.source.stop(); } catch (e) { /* already stopped */ }
+                activeAmbient = null;
+            }
             recorder.stop();
         };
 
@@ -588,6 +762,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             isCancelled = true;
             for (const s of activeSources) { try { s.stop(); } catch (e) { /* already stopped */ } }
             if (activeMusic) { try { activeMusic.source.stop(); } catch (e) { /* already stopped */ } }
+            if (activeAmbient) { try { activeAmbient.source.stop(); } catch (e) { /* already stopped */ } }
             if (audioCtx) audioCtx.close();
         };
     // Intentionally excludes mastering and cinematicProfile — those are read

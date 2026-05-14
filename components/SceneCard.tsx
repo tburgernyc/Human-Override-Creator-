@@ -109,7 +109,8 @@ export const SceneCard: React.FC<SceneCardProps> = ({
   const playAudio = async () => {
     if (!asset?.audioUrl || isPlayingAudio) return;
     try {
-        if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        // 48kHz keeps SceneCard previews consistent with Renderer/Player (B3).
+        if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
         if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
         setIsPlayingAudio(true);
         const audioB64 = asset.audioUrl.includes(',') ? asset.audioUrl.split(',')[1] : asset.audioUrl;

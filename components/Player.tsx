@@ -86,7 +86,9 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
         let audioBuffer: AudioBuffer | null = null;
 
         if (!audioCtxRef.current) {
-            audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+            // 48kHz so Wikimedia music keeps full bandwidth; TTS at 24kHz
+            // resamples cleanly via Web Audio's internal converter (B3).
+            audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
             voiceGainRef.current = audioCtxRef.current.createGain();
             voiceGainRef.current.connect(audioCtxRef.current.destination);
             bgMusicGainRef.current = audioCtxRef.current.createGain();

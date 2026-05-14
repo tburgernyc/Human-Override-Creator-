@@ -37,7 +37,9 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClo
             const audio = new Audio(`data:audio/pcm;base64,${data}`);
             // Note: Since it's raw PCM we might need the decoder, but for preview simple DataURI works if Gemini wraps it
             // For robust preview we'd use the decodeAudio helper
-            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 24000});
+            // Context at 48kHz; the 24kHz PCM buffer below resamples cleanly
+            // through Web Audio's playback path (B3).
+            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 48000});
             const binary = atob(data);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
