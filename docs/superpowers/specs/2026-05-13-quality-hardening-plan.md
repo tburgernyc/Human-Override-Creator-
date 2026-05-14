@@ -53,10 +53,11 @@ The original audit prioritized the catastrophic structural defects (character co
 - P4.8 added 150ms silence between consecutive lines, but the gap is applied to *all* line transitions, not just speaker changes. A character delivering a long monologue gets choppy 150ms breaks every sentence.
 - **Fix:** Only insert silence between *different* speakers, or use 50ms for same-speaker transitions and 200ms for speaker changes.
 
-### B10. **`generateSceneImage` requests "2K"/"1K" but downstream Veo uses 720/1080p**
-- `services/gemini.ts:~470` — `imageSize: resolution === Resolution.FHD ? '2K' : '1K'`. The image is then fed to Veo which renders at the project resolution. The extra detail is mostly thrown away on encoding.
-- **Impact:** ~3× the image-gen cost (Gemini bills by pixels) for marginal final-quality gain.
-- **Fix:** Match imageSize to the actual Veo output resolution — `1080p` (or 720p for fast).
+### B10. ~~`generateSceneImage` requests "2K"/"1K" but downstream Veo uses 720/1080p~~ — **RESOLVED, not a bug (2026-05-13)**
+- `services/gemini.ts:~480` — `imageSize: resolution === Resolution.FHD ? '2K' : '1K'`.
+- Closer inspection: `gemini-3-pro-image-preview` only accepts `'1K'` or `'2K'` for `imageSize` (the plan's suggested `'1080p'` value isn't valid). For 16:9, `'1K'` ≈ 1408×768 (below FHD 1920×1080 — would force Veo to upscale, losing detail) and `'2K'` ≈ 2752×1408 (comfortable headroom for FHD). `'1K'` for HD (720p target 1280×720) is well-matched.
+- Cost differential is ~1.5–2× (not 3×), and sharper Veo input typically yields cleaner output. The current mapping is intentional and correct.
+- **No change required.**
 
 ### B11. **`/api/download` allowlist is prefix-only**
 - `server/proxy.ts` — `uri.startsWith('https://generativelanguage.googleapis.com/')` is enough to use the endpoint. Anyone who can reach the server can use it as a Gemini-domain proxy on our API key.

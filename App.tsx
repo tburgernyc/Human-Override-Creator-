@@ -51,8 +51,15 @@ const ALL_PROJECTS_KEY = 'human_override_archives_v5';
 
 type ProductionPhase = 'genesis' | 'manifest' | 'synthesis' | 'post';
 
-// Module-level constant so productionSeed is stable and no new object is created on each render
-const DEFAULT_PROJECT: ProjectState = {
+const newProjectId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `proj_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+// Factory rather than a module-level constant so each fresh project gets its own
+// projectId and productionSeed (a constant shared them across every "new project").
+const makeDefaultProject = (): ProjectState => ({
+  projectId: newProjectId(),
   script: '', status: 'idle', characters: [], scenes: [], assets: {}, tasks: [], modules: {}, productionLog: [],
   currentStepMessage: '', globalStyle: VISUAL_STYLES[0], productionSeed: Math.floor(Math.random() * 1000000),
   activeDraft: null,
@@ -60,20 +67,24 @@ const DEFAULT_PROJECT: ProjectState = {
     musicVolume: 15, voiceVolume: 100, ambientVolume: 30, filmGrain: 5,
     bloomIntensity: 10, vignetteIntensity: 30, lightLeakIntensity: 20, filmBurnIntensity: 10, lutPreset: 'none'
   }
-};
+});
 
 // Brings archived projects forward through schema changes (new fields, renamed
 // keys, missing arrays). Without this, loading a pre-Phase-1 archive surfaces
 // undefined where the UI expects arrays/objects, breaking the dashboard.
 const migrateProject = (raw: any): ProjectState => {
-  if (!raw || typeof raw !== 'object') return { ...DEFAULT_PROJECT };
+  const defaults = makeDefaultProject();
+  if (!raw || typeof raw !== 'object') return defaults;
   return {
-    ...DEFAULT_PROJECT,
+    ...defaults,
     ...raw,
+    // Pre-B15 records lack projectId; the default already supplies one, so spread
+    // order only preserves raw.projectId when it exists.
+    projectId: typeof raw.projectId === 'string' && raw.projectId ? raw.projectId : defaults.projectId,
     // Always start with empty assets — base64 binaries are too large for
     // localStorage and IndexedDB recovery (Phase 4.2) is the canonical source.
     assets: {},
-    mastering: { ...DEFAULT_PROJECT.mastering!, ...(raw.mastering || {}) },
+    mastering: { ...defaults.mastering!, ...(raw.mastering || {}) },
     modules: (raw.modules && typeof raw.modules === 'object') ? raw.modules : {},
     productionLog: Array.isArray(raw.productionLog) ? raw.productionLog : [],
     characters: Array.isArray(raw.characters) ? raw.characters : [],
@@ -95,7 +106,7 @@ const App: React.FC = () => {
       console.warn('Corrupted project data in localStorage, resetting to defaults.', e);
       localStorage.removeItem(LOCAL_STORAGE_KEY);
     }
-    return { ...DEFAULT_PROJECT };
+    return { ...makeDefaultProject() };
   });
 
   const [archives, setArchives] = useState<ProjectState[]>(() => {
@@ -147,6 +158,10 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Mutable cancel flag for batch operations — set by handleCancelBatch, checked between scenes.
   const batchCancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  // Scene IDs currently mid-generation (image/video/audio or extension). Used to
+  // drop duplicate clicks on the same scene's "Take" button before they fire a
+  // second, redundant Veo request.
+  const inFlightScenesRef = useRef<Set<string>>(new Set());
   const [isCancellingBatch, setIsCancellingBatch] = useState(false);
 
   const completeSceneCount = project.scenes.filter(s => project.assets[s.id]?.status === 'complete').length;
@@ -168,27 +183,39 @@ const App: React.FC = () => {
     checkAuth();
   }, []);
 
-  // Restore assets from IndexedDB on mount. localStorage only holds metadata
-  // (scenes, characters, prompts) because base64 binaries exceed its quota.
-  // Without this, a page refresh used to wipe 10-20 minutes of generated work.
+  // Restore assets from IndexedDB whenever the active projectId changes (mount,
+  // archive load, project import). localStorage only holds metadata because base64
+  // binaries exceed its quota — without this, a page refresh used to wipe 10-20
+  // minutes of generated work. Per-projectId scoping (B15) means switching
+  // archives reads that archive's bucket instead of a shared 'active' record.
+  // `assetsLoadingRef` blocks the debounced save effect from writing the empty
+  // bucket back over the loaded data during the brief window between switch and
+  // IDB read completing.
+  const assetsLoadingRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    assetsLoadingRef.current = true;
     (async () => {
-      const stored = await loadAssetsFromIDB();
-      if (cancelled || !stored) return;
-      setProject(prev => {
-        // Only restore assets for scenes we actually still have. Stale entries
-        // for deleted scenes get dropped here.
-        const validSceneIds = new Set(prev.scenes.map(s => s.id));
-        const filtered: typeof stored = {};
-        for (const [sceneId, asset] of Object.entries(stored)) {
-          if (validSceneIds.has(sceneId)) filtered[sceneId] = asset;
-        }
-        return { ...prev, assets: filtered };
-      });
+      const stored = await loadAssetsFromIDB(project.projectId);
+      if (cancelled) { assetsLoadingRef.current = false; return; }
+      if (stored) {
+        setProject(prev => {
+          // Guard against stale loads if the user switched projects mid-load.
+          if (prev.projectId !== project.projectId) return prev;
+          // Only restore assets for scenes we actually still have. Stale entries
+          // for deleted scenes get dropped here.
+          const validSceneIds = new Set(prev.scenes.map(s => s.id));
+          const filtered: typeof stored = {};
+          for (const [sceneId, asset] of Object.entries(stored)) {
+            if (validSceneIds.has(sceneId)) filtered[sceneId] = asset;
+          }
+          return { ...prev, assets: filtered };
+        });
+      }
+      assetsLoadingRef.current = false;
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [project.projectId]);
 
   useEffect(() => {
     // Debounce saves and strip binary assets from localStorage. Assets persist
@@ -207,13 +234,26 @@ const App: React.FC = () => {
   }, [project]);
 
   // Asset persistence to IndexedDB, debounced separately from the metadata
-  // save so a slider tweak doesn't rewrite 50MB of base64.
+  // save so a slider tweak doesn't rewrite 50MB of base64. Skipped while the
+  // load effect above is in flight — otherwise the transient empty bucket from
+  // an archive switch can race ahead of the IDB read and wipe the loaded data.
+  // A short cooldown on failure-toasts prevents spamming when the failure mode
+  // is persistent (e.g. quota exceeded fires on every debounce cycle).
+  const lastAssetPersistErrorAtRef = useRef(0);
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveAssetsToIDB(project.assets).catch(e => console.warn('Asset persist failed:', e));
+      if (assetsLoadingRef.current) return;
+      saveAssetsToIDB(project.projectId, project.assets).catch(e => {
+        console.warn('Asset persist failed:', e);
+        const now = Date.now();
+        if (now - lastAssetPersistErrorAtRef.current < 30_000) return;
+        lastAssetPersistErrorAtRef.current = now;
+        const msg = e instanceof Error ? e.message : String(e);
+        addLog(`Asset persistence failed — your generated scenes may not survive a refresh. (${msg})`, 'error');
+      });
     }, 1500);
     return () => clearTimeout(timer);
-  }, [project.assets]);
+  }, [project.assets, project.projectId]);
 
   useEffect(() => {
     localStorage.setItem(ALL_PROJECTS_KEY, JSON.stringify(archives));
@@ -370,6 +410,11 @@ const App: React.FC = () => {
   const handleGenerateSceneAsset = async (sceneId: string, feedback?: string) => {
     const scene = project.scenes.find(s => s.id === sceneId);
     if (!scene) return;
+    if (inFlightScenesRef.current.has(sceneId)) {
+      addLog(`Scene #${project.scenes.indexOf(scene) + 1} is already generating — duplicate request ignored.`, 'system');
+      return;
+    }
+    inFlightScenesRef.current.add(sceneId);
 
     setProject(prev => ({
       ...prev,
@@ -457,6 +502,8 @@ const App: React.FC = () => {
       const sceneIdx = project.scenes.findIndex(s => s.id === sceneId) + 1;
       addLog(`Sequence generation failed for Scene #${sceneIdx}: ${msg}`, "error");
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], status: 'error', error: msg } } }));
+    } finally {
+      inFlightScenesRef.current.delete(sceneId);
     }
   };
 
@@ -468,6 +515,11 @@ const App: React.FC = () => {
       addLog(`Cannot extend Scene #${project.scenes.indexOf(scene) + 1}: the original Veo URI is missing (regenerate the scene first to enable extension).`, "error");
       return;
     }
+    if (inFlightScenesRef.current.has(sceneId)) {
+      addLog(`Scene #${project.scenes.indexOf(scene) + 1} is already generating — extension request ignored.`, 'system');
+      return;
+    }
+    inFlightScenesRef.current.add(sceneId);
 
     addLog(`Extending temporal sequence for Scene #${project.scenes.indexOf(scene) + 1}`, "system");
     setProject(prev => ({
@@ -493,6 +545,8 @@ const App: React.FC = () => {
       const msg = e instanceof Error ? e.message : 'extension failed';
       addLog(`Extension failure for Scene #${sceneId}: ${msg}`, "error");
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...asset, status: 'complete' } } }));
+    } finally {
+      inFlightScenesRef.current.delete(sceneId);
     }
   };
 
@@ -708,7 +762,7 @@ const App: React.FC = () => {
     >
       <div className={`relative min-h-screen transition-all duration-500 ease-in-out pb-32 ${chatOpen ? 'xl:pr-[25%]' : ''}`}>
         {view === 'landing' && <LandingPage onStart={() => setView('dashboard')} />}
-        {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { clearAssetsFromIDB(); setProject(migrateProject(p)); setView('dashboard'); }} onDelete={idx => setArchives(prev => prev.filter((_, i) => i !== idx))} onImport={() => fileInputRef.current?.click()} />}
+        {view === 'projects' && <ProjectsView projects={archives} onSelect={p => { setProject(migrateProject(p)); setView('dashboard'); }} onDelete={idx => { const removed = archives[idx]; if (removed?.projectId) clearAssetsFromIDB(removed.projectId).catch(() => {}); setArchives(prev => prev.filter((_, i) => i !== idx)); }} onImport={() => fileInputRef.current?.click()} />}
 
         <input
           type="file"
@@ -722,7 +776,6 @@ const App: React.FC = () => {
             reader.onload = (ev) => {
               try {
                 const data = JSON.parse(ev.target!.result as string);
-                clearAssetsFromIDB().catch(() => {});
                 setProject(migrateProject(data));
                 setView('dashboard');
               } catch {

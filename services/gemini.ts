@@ -53,6 +53,18 @@ const getAIClient = (): GoogleGenAI => {
   return new GoogleGenAI({ apiKey: 'proxy', httpOptions: { baseUrl: PROXY_BASE_URL, apiVersion: '' } });
 };
 
+// Promise-race timeout. Without this, a hung connection (e.g. captive WiFi
+// intercepting TLS, or a stalled upstream) waits for the OS-level give-up,
+// which can be several minutes — long enough that users assume the app is broken.
+const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+
 const retryWithBackoff = async <T>(
   operation: () => Promise<T>,
   retries: number = 4,
@@ -495,12 +507,14 @@ export const generateSceneVideo = async (imageBase64: string, prompt: string, as
   const ai = getAIClient();
   // Only the initial operation submission is wrapped in retry — the polling
   // loop below has its own exponential backoff for transient 5xx during polls.
-  let operation: any = await retryWithBackoff(() => ai.models.generateVideos({
+  // 60s per attempt gives Veo plenty of headroom while still failing fast on a
+  // hung connection (which would otherwise stall for the OS TCP timeout).
+  let operation: any = await retryWithBackoff(() => withTimeout(ai.models.generateVideos({
     model: resolution === Resolution.FHD ? MODEL_NAMES.VIDEO : MODEL_NAMES.VIDEO_FAST,
     prompt: `${style}. ${prompt}. Subtle cinematic motion.`,
     image: { imageBytes: stripDataUriPrefix(imageBase64), mimeType: 'image/png' },
     config: { numberOfVideos: 1, aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any, resolution }
-  }));
+  }), 60_000, 'Veo submission'));
 
   // Exponential backoff with 30s cap; total wall-clock budget 10 min.
   const startedAt = Date.now();
@@ -531,7 +545,7 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
   }
   const ai = getAIClient();
   // Only 720p videos can be extended currently according to Veo guidelines
-  let operation: any = await retryWithBackoff(() => ai.models.generateVideos({
+  let operation: any = await retryWithBackoff(() => withTimeout(ai.models.generateVideos({
     model: 'veo-3.1-generate-preview',
     prompt: `Continue the scene: ${prompt}`,
     video: { uri: prevVideoUri },
@@ -540,7 +554,7 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
       resolution: '720p',
       aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any
     }
-  }));
+  }), 60_000, 'Veo extension submission'));
 
   const startedAt = Date.now();
   const TOTAL_BUDGET_MS = 10 * 60 * 1000;

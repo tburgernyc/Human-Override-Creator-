@@ -1,6 +1,8 @@
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ProjectState } from '../types';
+
+const CONFIRM_DELETE_WINDOW_MS = 4000;
 
 interface ProjectsViewProps {
   projects: ProjectState[];
@@ -10,6 +12,27 @@ interface ProjectsViewProps {
 }
 
 export const ProjectsView: React.FC<ProjectsViewProps> = ({ projects, onSelect, onDelete, onImport }) => {
+  const [pendingDeleteIdx, setPendingDeleteIdx] = useState<number | null>(null);
+  const armTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => { if (armTimerRef.current) window.clearTimeout(armTimerRef.current); }, []);
+
+  const armDelete = (idx: number) => {
+    if (armTimerRef.current) window.clearTimeout(armTimerRef.current);
+    setPendingDeleteIdx(idx);
+    armTimerRef.current = window.setTimeout(() => setPendingDeleteIdx(null), CONFIRM_DELETE_WINDOW_MS);
+  };
+
+  const handleTrashClick = (idx: number) => {
+    if (pendingDeleteIdx === idx) {
+      if (armTimerRef.current) window.clearTimeout(armTimerRef.current);
+      setPendingDeleteIdx(null);
+      onDelete(idx);
+    } else {
+      armDelete(idx);
+    }
+  };
+
   return (
     <div className="py-12 animate-in fade-in slide-in-from-bottom-5 duration-700">
       <div className="flex justify-between items-end mb-12">
@@ -82,11 +105,16 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ projects, onSelect, 
                   >
                     Restore Sequence
                   </button>
-                  <button 
-                    onClick={() => onDelete(i)}
-                    className="w-12 h-12 flex items-center justify-center bg-white/5 border border-white/10 rounded-xl text-solar-amber/50 hover:text-solar-amber hover:bg-solar-amber/10 transition-all"
+                  <button
+                    onClick={() => handleTrashClick(i)}
+                    title={pendingDeleteIdx === i ? 'Click again within 4s to confirm delete' : 'Delete archive'}
+                    className={pendingDeleteIdx === i
+                      ? "px-4 h-12 flex items-center justify-center bg-solar-amber/20 border border-solar-amber rounded-xl text-solar-amber hover:bg-solar-amber/30 transition-all text-[9px] font-bold uppercase tracking-widest whitespace-nowrap"
+                      : "w-12 h-12 flex items-center justify-center bg-white/5 border border-white/10 rounded-xl text-solar-amber/50 hover:text-solar-amber hover:bg-solar-amber/10 transition-all"}
                   >
-                    <i className="fa-solid fa-trash-can text-sm"></i>
+                    {pendingDeleteIdx === i
+                      ? <><i className="fa-solid fa-triangle-exclamation mr-2 text-sm"></i>Confirm?</>
+                      : <i className="fa-solid fa-trash-can text-sm"></i>}
                   </button>
                 </div>
               </div>

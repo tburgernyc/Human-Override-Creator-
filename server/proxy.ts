@@ -75,13 +75,23 @@ app.all('/api/gemini/*', async (req, res) => {
     }
 });
 
+// Strict allowlist: only Veo file URIs are downloadable. Without this the endpoint
+// would forward any request under generativelanguage.googleapis.com using our API key.
+function isAllowedDownloadUri(uri: string): boolean {
+    let parsed: URL;
+    try { parsed = new URL(uri); } catch { return false; }
+    if (parsed.protocol !== 'https:') return false;
+    if (parsed.host !== 'generativelanguage.googleapis.com') return false;
+    // Veo's generated video URIs are emitted as `/v1beta/files/<file-id>:download`.
+    return parsed.pathname.startsWith('/v1beta/files/');
+}
+
 // Secure video/file download endpoint — injects API key server-side so the client never holds it.
-// The URI allowlist prevents this from acting as an open proxy.
 // On Railway, request timeouts are generous enough that large Veo downloads complete
 // without the per-request limits that constrain serverless deployments.
 app.get('/api/download', async (req, res) => {
     const uri = req.query.uri as string;
-    if (!uri || !uri.startsWith('https://generativelanguage.googleapis.com/')) {
+    if (!uri || !isAllowedDownloadUri(uri)) {
         return res.status(400).json({ error: 'Invalid or missing URI' });
     }
     try {

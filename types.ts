@@ -142,6 +142,10 @@ export interface YoutubeMetadata {
 }
 
 export interface ProjectState {
+  // Stable identifier so IndexedDB asset storage is scoped per-project rather than
+  // sharing a single 'active' record (which made two tabs stomp each other and
+  // made archive switching ambiguous). Generated on project creation.
+  projectId: string;
   script: string;
   status: 'idle' | 'analyzing' | 'character_gen' | 'scene_gen' | 'animating' | 'audio_gen' | 'validating' | 'rendering' | 'ready';
   characters: Character[];

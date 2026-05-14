@@ -8,7 +8,7 @@ interface CharacterModalProps {
     character: Character;
     onClose: () => void;
     onSave: (char: Character) => void;
-    onRegenerateImage: (id: string) => void;
+    onRegenerateImage: (id: string) => Promise<void> | void;
 }
 
 export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClose, onSave, onRegenerateImage }) => {
@@ -18,6 +18,17 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClo
     const [speed, setSpeed] = useState(character.voiceSettings?.speed || 1.0);
     const [pitch, setPitch] = useState(character.voiceSettings?.pitch || 0);
     const [isPreviewing, setIsPreviewing] = useState(false);
+    const [isRegenerating, setIsRegenerating] = useState(false);
+
+    const handleRegenerate = async () => {
+        if (isRegenerating) return;
+        setIsRegenerating(true);
+        try {
+            await onRegenerateImage(character.id);
+        } finally {
+            setIsRegenerating(false);
+        }
+    };
 
     const handlePreview = async () => {
         setIsPreviewing(true);
@@ -68,11 +79,13 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClo
                                 <i className="fa-solid fa-user-astronaut text-3xl"></i>
                             </div>
                         )}
-                        <button 
-                            onClick={() => onRegenerateImage(character.id)}
-                            className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        <button
+                            onClick={handleRegenerate}
+                            disabled={isRegenerating}
+                            title={isRegenerating ? 'Regenerating reference image…' : 'Regenerate reference image'}
+                            className={`absolute inset-0 bg-black/60 flex items-center justify-center transition-opacity ${isRegenerating ? 'opacity-100 cursor-wait' : 'opacity-0 group-hover:opacity-100'}`}
                         >
-                            <i className="fa-solid fa-wand-magic-sparkles text-white text-xl"></i>
+                            <i className={`fa-solid ${isRegenerating ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles'} text-white text-xl`}></i>
                         </button>
                     </div>
                     <p className="text-white font-bold text-center mb-1">{character.name}</p>

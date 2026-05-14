@@ -15,6 +15,7 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
     const [currentSceneIndex, setCurrentSceneIndex] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
     const [progress, setProgress] = useState(0);
+    const [playbackBlocked, setPlaybackBlocked] = useState(false);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
@@ -142,7 +143,20 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
         if (asset?.videoUrl && videoRef.current) {
             videoRef.current.src = asset.videoUrl;
             videoRef.current.loop = true;
-            videoRef.current.play().catch(e => console.error("Play failed", e));
+            try {
+                await videoRef.current.play();
+            } catch (e) {
+                // Autoplay blocked (most often Safari/iOS without a fresh user gesture).
+                // Audio runs on its own AudioContext, so if we let it start anyway the user
+                // hears narration with no picture. Halt the scene loop and prompt for a tap.
+                console.warn("Video play() rejected, surfacing tap-to-play prompt", e);
+                setPlaybackBlocked(true);
+                setIsPlaying(false);
+                if (bgMusicSourceRef.current) try { bgMusicSourceRef.current.stop(); } catch { }
+                bgMusicSourceRef.current = null;
+                currentMoodRef.current = null;
+                return;
+            }
         } else if (asset?.imageUrl && videoRef.current) {
             videoRef.current.poster = asset.imageUrl;
         }
@@ -202,6 +216,19 @@ export const Player: React.FC<PlayerProps> = ({ scenes, assets, mastering, onClo
                         <i className="fa-solid fa-circle-notch fa-spin text-4xl mb-4 text-luna-gold/50"></i>
                         {isPlaying ? 'Manifesting Sequence...' : 'Awaiting Production Start'}
                     </div>
+                )}
+
+                {playbackBlocked && (
+                    <button
+                        onClick={() => { setPlaybackBlocked(false); setIsPlaying(true); }}
+                        className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-eclipse-black/70 backdrop-blur-sm"
+                    >
+                        <div className="w-20 h-20 rounded-full nm-button-gold flex items-center justify-center text-3xl text-white mb-4 shadow-nm-gold">
+                            <i className="fa-solid fa-play ml-2"></i>
+                        </div>
+                        <p className="text-starlight text-sm font-bold uppercase tracking-widest">Tap to enable playback</p>
+                        <p className="text-mystic-gray text-[10px] mt-1">Browser blocked autoplay</p>
+                    </button>
                 )}
 
                 <div className="absolute inset-0 pointer-events-none opacity-[0.02] z-[25] bg-[url('/textures/stardust.png')]"></div>
