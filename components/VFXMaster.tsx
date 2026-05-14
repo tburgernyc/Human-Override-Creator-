@@ -25,12 +25,17 @@ export const VFXMaster: React.FC<VFXMasterProps> = ({
     { id: 'noir', label: 'Noir', desc: 'Dramatic shadows and monochrome textures.' }
   ];
 
+  // Labels describe what the CSS filter actually does (B6). The presets were
+  // formerly named after real film stocks (Kodak Vision3, Fuji 400H,
+  // Technicolor IV) but the implementation is a stack of CSS canvas filters,
+  // not a real 3D LUT — calling them film names overstated the fidelity.
+  // IDs are preserved so existing saved projects keep their selection.
   const luts = [
     { id: 'none', label: 'Bypass (None)' },
-    { id: 'kodak_5219', label: 'Kodak Vision3' },
-    { id: 'fuji_400h', label: 'Fuji Pro 400H' },
-    { id: 'noir', label: 'Panatomic-X' },
-    { id: 'technicolor', label: 'Technicolor IV' }
+    { id: 'kodak_5219', label: 'Warm Contrast' },
+    { id: 'fuji_400h', label: 'Soft Pastel' },
+    { id: 'noir', label: 'High-Contrast B&W' },
+    { id: 'technicolor', label: 'Vivid Saturation' }
   ];
 
   return (

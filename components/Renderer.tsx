@@ -32,11 +32,54 @@ const pickMimeType = (): string | null => {
     return null;
 };
 
-// Adaptive bitrate: ~0.1 bits per pixel-second, clamped to a sane range so
-// 720p doesn't waste bandwidth and 4K doesn't blow up file size.
+// Adaptive bitrate: ~0.15 bits per pixel-second (B5 — was 0.1, which clocked
+// 1080p30 at ~6.2 Mbps, below YouTube's 8 Mbps minimum). Clamped to a sane
+// range so 720p doesn't waste bandwidth and 4K doesn't blow up file size.
 const computeBitrate = (w: number, h: number, fps: number): number => {
-    const raw = Math.round(w * h * fps * 0.1);
+    const raw = Math.round(w * h * fps * 0.15);
     return Math.max(2_000_000, Math.min(20_000_000, raw));
+};
+
+// MediaRecorder timeslice for ondataavailable (B4). Without this argument the
+// callback only fires on stop, so a tab crash mid-render forfeits everything;
+// emitting chunks every second keeps work recoverable.
+const RECORDER_CHUNK_MS = 1000;
+
+// Map a recorder mime type to a file extension (R2). pickMimeType chooses the
+// first browser-supported codec from a fallback list, so the recorded blob
+// might be webm or mp4 depending on the Chromium version; the download
+// filename should reflect what was actually written.
+const fileExtensionFor = (mime: string | null): string => {
+    if (!mime) return 'webm';
+    if (mime.includes('mp4')) return 'mp4';
+    if (mime.includes('webm')) return 'webm';
+    return 'video';
+};
+
+// Film grain plate generator (B7). Smaller plates stretched over the output
+// frame give grain a natural softness and run cheaper than full-resolution
+// noise. Monochrome — color noise reads as dead pixels rather than emulsion.
+const GRAIN_PLATE_SIZE = 480;
+const GRAIN_PLATE_COUNT = 4;
+const createGrainPlate = (): HTMLCanvasElement => {
+    const c = document.createElement('canvas');
+    c.width = GRAIN_PLATE_SIZE;
+    c.height = GRAIN_PLATE_SIZE;
+    const cctx = c.getContext('2d');
+    if (!cctx) return c;
+    const img = cctx.createImageData(GRAIN_PLATE_SIZE, GRAIN_PLATE_SIZE);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+        // Gaussian-ish via averaging — looks more film-like than uniform.
+        const n = (Math.random() + Math.random() + Math.random()) / 3;
+        const v = Math.floor(n * 255);
+        d[i] = v;
+        d[i + 1] = v;
+        d[i + 2] = v;
+        d[i + 3] = 255;
+    }
+    cctx.putImageData(img, 0, 0);
+    return c;
 };
 
 // Loudness normalization (Q2). YouTube/Spotify target -14 LUFS; -18 dBFS RMS
@@ -132,6 +175,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     const [statusMessage, setStatusMessage] = useState("Initializing Pipeline...");
     const [progress, setProgress] = useState(0);
     const [finalUrl, setFinalUrl] = useState<string | null>(null);
+    const [finalMimeType, setFinalMimeType] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
     const [etaSec, setEtaSec] = useState<number | null>(null);
@@ -144,6 +188,12 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     const bgMusicGainRef = useRef<GainNode | null>(null);
     const ambientGainRef = useRef<GainNode | null>(null);
     const voiceGainRefs = useRef<Set<GainNode>>(new Set());
+    // Pre-rendered monochromatic noise plates for film grain (B7). The old
+    // implementation painted 5 random pixels per frame — that read as digital
+    // dropout, not grain. Plates are generated once at the start of the render
+    // effect and cycled by frame index to give the grain temporal variation
+    // without per-frame allocation.
+    const grainPlatesRef = useRef<HTMLCanvasElement[]>([]);
     useEffect(() => { masteringRef.current = mastering; }, [mastering]);
     useEffect(() => { cinematicProfileRef.current = cinematicProfile; }, [cinematicProfile]);
     // Live-apply music volume changes during a render. The bg music gain is the
@@ -187,8 +237,11 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         if (liveCinematic === 'vintage') filters.push('sepia(35%) contrast(90%) brightness(95%)');
         if (liveCinematic === 'noir') filters.push('grayscale(100%) contrast(150%)');
 
-        // LUT Preset simulations
+        // LUT preset approximations via CSS canvas filters. These are deliberate
+        // approximations, not real 3D LUTs — the UI labels them accordingly
+        // ("Warm Contrast" etc.) rather than as specific film stocks (B6).
         if (liveMastering?.lutPreset === 'kodak_5219') filters.push('contrast(110%) saturate(105%) sepia(5%)');
+        if (liveMastering?.lutPreset === 'fuji_400h') filters.push('saturate(85%) contrast(95%) brightness(102%) hue-rotate(-3deg)');
         if (liveMastering?.lutPreset === 'noir') filters.push('grayscale(100%) contrast(120%)');
         if (liveMastering?.lutPreset === 'technicolor') filters.push('saturate(180%) contrast(110%)');
 
@@ -230,8 +283,16 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         ctx.restore();
     };
 
+    // Adaptive quality tier (R1). When the frame pacer detects sustained late
+    // frames it bumps this up so applyMasteringEffects can drop optional layers.
+    //   tier 0 — full effects (default)
+    //   tier 1 — skip the per-frame grain composite (the most allocation-heavy)
+    //   tier 2 — also skip bloom + light leak radial gradients
+    const qualityTierRef = useRef(0);
+
     const applyMasteringEffects = (ctx: CanvasRenderingContext2D, w: number, h: number, elapsed: number) => {
         const liveMastering = masteringRef.current;
+        const tier = qualityTierRef.current;
         // Subtle Lens Flare (always-on baseline ambient sparkle)
         if (Math.sin(elapsed / 2000) > 0.85) {
             ctx.save();
@@ -249,7 +310,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
 
         // Bloom: bright-pass approximation via additive soft radial highlights
         const bloom = (liveMastering?.bloomIntensity ?? 0) / 100;
-        if (bloom > 0) {
+        if (bloom > 0 && tier < 2) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
             ctx.globalAlpha = bloom * 0.6;
@@ -267,7 +328,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
 
         // Light leak: warm edge gradient that drifts over time
         const leak = (liveMastering?.lightLeakIntensity ?? 0) / 100;
-        if (leak > 0) {
+        if (leak > 0 && tier < 2) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
             const drift = (Math.sin(elapsed / 5000) + 1) / 2;
@@ -311,17 +372,34 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             ctx.restore();
         }
 
-        // Film Grain
+        // Film grain (B7) — cycle pre-rendered monochromatic noise plates
+        // composited via 'overlay'. Plates are stretched from 480×480 to the
+        // output frame, which gives the grain a natural softness vs hard pixels.
         const grain = liveMastering?.filmGrain ?? 5;
-        if (grain > 0 && Math.random() > 0.5) {
+        const plates = grainPlatesRef.current;
+        if (grain > 0 && plates.length > 0 && tier < 1) {
+            const plate = plates[Math.floor(elapsed / FRAME_INTERVAL_MS) % plates.length];
             ctx.save();
-            ctx.globalAlpha = grain / 200;
-            ctx.fillStyle = `rgba(${Math.random() * 255},${Math.random() * 255},${Math.random() * 255},0.15)`;
-            for (let i = 0; i < 5; i++) {
-                ctx.fillRect(Math.random() * w, Math.random() * h, 2, 2);
-            }
+            ctx.globalCompositeOperation = 'overlay';
+            ctx.globalAlpha = Math.min(0.35, grain / 150);
+            ctx.drawImage(plate, 0, 0, w, h);
             ctx.restore();
         }
+    };
+
+    // Compute the per-frame camera transform (scale + translate) for a scene's
+    // motion at progress p. Extracted so motion blur (B8) can sample two points
+    // along the motion curve and composite them, instead of drawing single
+    // crisp frames per step (which makes pans visibly judder).
+    const computeMotionTransform = (motion: CameraMotion, p: number, w: number, h: number, mediaW: number, mediaH: number) => {
+        let scale = Math.max(w / mediaW, h / mediaH);
+        let translateX = 0;
+        let translateY = 0;
+        if (motion === 'zoom_in') scale *= (1 + p * 0.18);
+        else if (motion === 'zoom_out') scale *= (1.18 - p * 0.18);
+        else if (motion === 'pan_left') translateX = -p * 150;
+        else if (motion === 'pan_right') translateX = p * 150;
+        return { scale, translateX, translateY };
     };
 
     const drawMediaFrame = (
@@ -330,7 +408,8 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         w: number, h: number,
         p: number,
         scene: Scene,
-        prevMedia?: HTMLVideoElement | HTMLImageElement | null
+        prevMedia: HTMLVideoElement | HTMLImageElement | null,
+        durationMs: number
     ) => {
         ctx.save();
         const transition = scene.transition || 'fade';
@@ -358,17 +437,32 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             applyGrading(ctx, scene.colorGrading);
             const mediaW = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth;
             const mediaH = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight;
-            let scale = Math.max(w / mediaW, h / mediaH);
             const motion = scene.cameraMotion || 'random_cinematic';
+            const hasMotion = motion === 'zoom_in' || motion === 'zoom_out' || motion === 'pan_left' || motion === 'pan_right';
 
-            if (motion === 'zoom_in') scale *= (1 + p * 0.18);
-            else if (motion === 'zoom_out') scale *= (1.18 - p * 0.18);
-            else if (motion === 'pan_left') ctx.translate(-p * 150, 0);
-            else if (motion === 'pan_right') ctx.translate(p * 150, 0);
+            const drawAt = (t: number, alpha: number) => {
+                const { scale, translateX, translateY } = computeMotionTransform(motion, t, w, h, mediaW, mediaH);
+                const drawW = mediaW * scale;
+                const drawH = mediaH * scale;
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.translate(translateX, translateY);
+                ctx.drawImage(media, (w - drawW) / 2, (h - drawH) / 2, drawW, drawH);
+                ctx.restore();
+            };
 
-            const drawW = mediaW * scale;
-            const drawH = mediaH * scale;
-            ctx.drawImage(media, (w - drawW) / 2, (h - drawH) / 2, drawW, drawH);
+            if (hasMotion && durationMs > 0) {
+                // Motion blur (B8): composite the current frame with a half-frame-back
+                // sample of the same motion path. Without this, pans on detail-heavy
+                // backgrounds visibly judder; with it the camera move feels smoother
+                // and reads as real motion blur rather than per-frame jumps.
+                const dp = (FRAME_INTERVAL_MS * 0.5) / durationMs;
+                const pPrev = Math.max(0, p - dp);
+                drawAt(pPrev, 0.4);
+                drawAt(p, 0.85);
+            } else {
+                drawAt(p, 1);
+            }
         }
         ctx.restore();
     };
@@ -407,6 +501,12 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 setRenderState('error');
                 setErrorMsg('Your browser does not support any compatible video codec for recording.');
                 return;
+            }
+
+            // Pre-generate grain plates once per render (B7). Reused every frame
+            // so we don't reallocate noise data 30 times a second.
+            if (grainPlatesRef.current.length === 0) {
+                for (let i = 0; i < GRAIN_PLATE_COUNT; i++) grainPlatesRef.current.push(createGrainPlate());
             }
 
             // 48kHz is the video-standard output rate. TTS at 24kHz upsamples
@@ -475,6 +575,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 const blob = new Blob(chunks, { type: mimeType });
                 const url = URL.createObjectURL(blob);
                 setFinalUrl(url);
+                setFinalMimeType(mimeType);
                 setRenderState('complete');
                 onComplete(url);
             };
@@ -499,7 +600,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
             voiceBusGain.gain.value = speechNormalizationGain;
             console.log(`[Renderer] Speech normalization gain: ${speechNormalizationGain.toFixed(3)} (target ${TARGET_SPEECH_RMS_DBFS} dBFS)`);
 
-            recorder.start();
+            recorder.start(RECORDER_CHUNK_MS);
             setRenderState('rendering');
 
             let lastMedia: HTMLVideoElement | HTMLImageElement | null = null;
@@ -685,19 +786,38 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     media = null;
                 }
 
-                // Fixed-step frame pacer — true 30 fps regardless of hardware
+                // Fixed-step frame pacer — true 30 fps regardless of hardware.
+                // Tracks late frames over a rolling window; if >20% of recent frames
+                // miss budget we bump qualityTier so applyMasteringEffects can drop
+                // optional layers (grain, then bloom + light leak). Tier drops back
+                // down on recovery so the rest of the scene gets full quality (R1).
                 let frameIndex = 0;
                 let lateFrames = 0;
+                const PACER_WINDOW = 30; // ≈1s of recent frames at 30 fps
+                const lateWindow: number[] = []; // 1 = late, 0 = on time
+                let lateWindowSum = 0;
                 while (true) {
                     if (isCancelled) break;
                     const targetTime = sceneStart + frameIndex * FRAME_INTERVAL_MS;
                     const now = performance.now();
                     if (now - sceneStart >= durationMs) break;
 
+                    let wasLate = 0;
                     if (now < targetTime) {
                         await sleep(targetTime - now);
                     } else if (now - targetTime > FRAME_INTERVAL_MS) {
                         lateFrames++;
+                        wasLate = 1;
+                    }
+                    lateWindow.push(wasLate);
+                    lateWindowSum += wasLate;
+                    if (lateWindow.length > PACER_WINDOW) lateWindowSum -= lateWindow.shift()!;
+                    if (lateWindow.length === PACER_WINDOW) {
+                        const lateFrac = lateWindowSum / PACER_WINDOW;
+                        const tier = qualityTierRef.current;
+                        if (lateFrac > 0.4 && tier < 2) qualityTierRef.current = 2;
+                        else if (lateFrac > 0.2 && tier < 1) qualityTierRef.current = 1;
+                        else if (lateFrac < 0.05 && tier > 0) qualityTierRef.current = Math.max(0, tier - 1);
                     }
 
                     const elapsed = performance.now() - sceneStart;
@@ -705,7 +825,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     ctx.fillStyle = '#000';
                     ctx.fillRect(0, 0, width, height);
                     if (media) {
-                        drawMediaFrame(ctx, media, width, height, p, scene, lastMedia);
+                        drawMediaFrame(ctx, media, width, height, p, scene, lastMedia, durationMs);
                     }
                     applyMasteringEffects(ctx, width, height, elapsed);
                     if (scene.textOverlay) {
@@ -714,7 +834,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     frameIndex++;
                 }
                 if (lateFrames > frameIndex * 0.05) {
-                    console.warn(`Scene ${i}: ${lateFrames}/${frameIndex} frames missed frame budget`);
+                    console.warn(`Scene ${i}: ${lateFrames}/${frameIndex} frames missed frame budget (tier ${qualityTierRef.current})`);
                 }
 
                 // Stop scene-local audio sources so they don't bleed into the next scene
@@ -790,7 +910,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     <h2 className="text-4xl font-bold text-white mb-4 uppercase font-mono italic">Compile Sequence Finalized</h2>
                     <p className="text-mystic-gray mb-12 text-sm uppercase tracking-widest font-bold">Neural tracks merged. Video unit ready for distribution.</p>
                     <div className="flex flex-col gap-4">
-                        <a href={finalUrl!} download="master_production_unit.webm" className="bg-gold-gradient text-white py-6 rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-xl hover:scale-[1.02] transition-all text-center">Download Master Unit</a>
+                        <a href={finalUrl!} download={`master_production_unit.${fileExtensionFor(finalMimeType)}`} className="bg-gold-gradient text-white py-6 rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-xl hover:scale-[1.02] transition-all text-center">Download Master Unit</a>
                         <button onClick={onCancel} className="text-mystic-gray hover:text-white uppercase tracking-widest text-[9px] font-black py-4">Close Synthesis Lab</button>
                     </div>
                 </div>
