@@ -6,6 +6,10 @@ export interface ToastItem {
   type: 'error' | 'success' | 'info';
   message: string;
   timestamp: number;
+  // Optional in-toast action (e.g. "Undo" after a destructive operation). The
+  // toast auto-dismisses after onClick runs, so callers don't need to manage
+  // dismissal themselves.
+  action?: { label: string; onClick: () => void };
 }
 
 interface ToastsProps {
@@ -33,6 +37,14 @@ const Toast: React.FC<{ toast: ToastItem; onDismiss: (id: string) => void }> = (
     <div className={`pointer-events-auto nm-panel border ${c.ring} rounded-2xl p-4 shadow-2xl bg-eclipse-black/90 backdrop-blur-xl flex items-start gap-3 max-w-md animate-in slide-in-from-right-5 fade-in duration-300`}>
       <i className={`fa-solid ${c.icon} ${c.text} text-base mt-0.5 shrink-0`}></i>
       <p className={`text-[11px] leading-relaxed flex-1 font-mono ${c.text}`}>{toast.message}</p>
+      {toast.action && (
+        <button
+          onClick={() => { toast.action!.onClick(); onDismiss(toast.id); }}
+          className={`shrink-0 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-lg border ${c.ring} ${c.text} hover:bg-white/5 transition-colors`}
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         onClick={() => onDismiss(toast.id)}
         aria-label="Dismiss notification"

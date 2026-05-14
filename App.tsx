@@ -51,6 +51,28 @@ const ALL_PROJECTS_KEY = 'human_override_archives_v5';
 
 type ProductionPhase = 'genesis' | 'manifest' | 'synthesis' | 'post';
 
+// Autosave indicator pill (UX1). Inline so the App.tsx render tree stays
+// self-contained — promoting to a dedicated component would be net negative
+// at this size.
+const SaveIndicator: React.FC<{ state: 'idle' | 'saving' | 'saved' | 'error' }> = ({ state }) => {
+  if (state === 'idle') return null;
+  const config = state === 'saving'
+    ? { icon: 'fa-circle-notch fa-spin', label: 'Saving…', cls: 'text-celestial-stone border-white/10' }
+    : state === 'saved'
+      ? { icon: 'fa-check', label: 'Saved', cls: 'text-deep-sage border-deep-sage/30' }
+      : { icon: 'fa-triangle-exclamation', label: 'Save failed', cls: 'text-solar-amber border-solar-amber/40' };
+  return (
+    <div
+      className={`ml-4 hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full border bg-eclipse-black/40 text-[9px] font-bold uppercase tracking-widest ${config.cls}`}
+      role="status"
+      aria-live="polite"
+    >
+      <i className={`fa-solid ${config.icon}`}></i>
+      {config.label}
+    </div>
+  );
+};
+
 const newProjectId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return `proj_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -154,6 +176,15 @@ const App: React.FC = () => {
   const [hasAuth, setHasAuth] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [autoDiagnosisTriggered, setAutoDiagnosisTriggered] = useState(false);
+  // Autosave indicator (UX1). Driven by both save effects below — the
+  // localStorage write and the IDB write each flip 'saving' → 'saved'. The
+  // 'saved' state self-clears to 'idle' after 2s; 'error' sticks until the
+  // next successful save so users notice failures even if they look away.
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // Scene cursor for arrow-key navigation (UX2). Distinct from any "selected
+  // scene" concept — it just tracks which scene was last scrolled into focus
+  // so ←/→ can advance from a sensible anchor.
+  const [keyboardSceneIdx, setKeyboardSceneIdx] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Mutable cancel flag for batch operations — set by handleCancelBatch, checked between scenes.
@@ -220,13 +251,16 @@ const App: React.FC = () => {
   useEffect(() => {
     // Debounce saves and strip binary assets from localStorage. Assets persist
     // separately to IndexedDB (see effect below) so refresh restores them.
+    setSaveState(s => (s === 'error' ? s : 'saving'));
     const timer = setTimeout(() => {
       try {
         const { assets: _stripped, ...persistable } = project;
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(persistable));
+        setSaveState(s => (s === 'error' ? s : 'saved'));
       } catch (e: any) {
         if (e.name === 'QuotaExceededError') {
           console.warn('localStorage quota exceeded — project metadata not saved.');
+          setSaveState('error');
         }
       }
     }, 1000);
@@ -241,19 +275,31 @@ const App: React.FC = () => {
   // is persistent (e.g. quota exceeded fires on every debounce cycle).
   const lastAssetPersistErrorAtRef = useRef(0);
   useEffect(() => {
+    setSaveState(s => (s === 'error' ? s : 'saving'));
     const timer = setTimeout(() => {
       if (assetsLoadingRef.current) return;
-      saveAssetsToIDB(project.projectId, project.assets).catch(e => {
-        console.warn('Asset persist failed:', e);
-        const now = Date.now();
-        if (now - lastAssetPersistErrorAtRef.current < 30_000) return;
-        lastAssetPersistErrorAtRef.current = now;
-        const msg = e instanceof Error ? e.message : String(e);
-        addLog(`Asset persistence failed — your generated scenes may not survive a refresh. (${msg})`, 'error');
-      });
+      saveAssetsToIDB(project.projectId, project.assets)
+        .then(() => setSaveState(s => (s === 'error' ? s : 'saved')))
+        .catch(e => {
+          console.warn('Asset persist failed:', e);
+          setSaveState('error');
+          const now = Date.now();
+          if (now - lastAssetPersistErrorAtRef.current < 30_000) return;
+          lastAssetPersistErrorAtRef.current = now;
+          const msg = e instanceof Error ? e.message : String(e);
+          addLog(`Asset persistence failed — your generated scenes may not survive a refresh. (${msg})`, 'error');
+        });
     }, 1500);
     return () => clearTimeout(timer);
   }, [project.assets, project.projectId]);
+
+  // Self-clear the 'saved' pulse back to 'idle' after a brief moment so the
+  // indicator settles instead of pinning bright-green permanently.
+  useEffect(() => {
+    if (saveState !== 'saved') return;
+    const t = setTimeout(() => setSaveState(s => (s === 'saved' ? 'idle' : s)), 2000);
+    return () => clearTimeout(t);
+  }, [saveState]);
 
   useEffect(() => {
     localStorage.setItem(ALL_PROJECTS_KEY, JSON.stringify(archives));
@@ -265,6 +311,57 @@ const App: React.FC = () => {
       setAutoDiagnosisTriggered(true);
     }
   }, [project.status, autoDiagnosisTriggered]);
+
+  // Keyboard shortcuts (UX2): Esc closes any open modal, Cmd/Ctrl+K toggles
+  // the assistant chat, ←/→ navigates between scenes when no text field is
+  // focused. Scoped to window so it works regardless of where focus sits.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+      if (e.key === 'Escape') {
+        // Batch-close every modal-ish state. They're rendered as separate
+        // overlays so they don't strictly nest; firing all closes is safe.
+        setShowPlayer(false);
+        setShowRenderer(false);
+        setShowMastering(false);
+        setShowManifest(false);
+        setShowAssetLibrary(false);
+        setShowMixer(false);
+        setShowAuditor(false);
+        setShowDeck(false);
+        setShowBRoll(false);
+        setShowStoryboard(false);
+        setShowScriptDoctor(false);
+        setShowAddCharacter(false);
+        setInspectingScene(null);
+        setEditingCharacter(null);
+        return;
+      }
+
+      if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setChatOpen(o => !o);
+        return;
+      }
+
+      if (!isInput && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const scenes = project.scenes;
+        if (scenes.length === 0) return;
+        e.preventDefault();
+        setKeyboardSceneIdx(prev => {
+          const next = e.key === 'ArrowRight'
+            ? Math.min(scenes.length - 1, prev + 1)
+            : Math.max(0, prev - 1);
+          scrollToScene(scenes[next].id);
+          return next;
+        });
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [project.scenes]);
 
   const addLog = (message: string, type: LogEntry['type'] = 'system', actionLabel?: string, actionId?: string, actionParams?: any) => {
     const newEntry: LogEntry = { id: Date.now().toString(), timestamp: Date.now(), type, message, actionLabel, actionId, actionParams };
@@ -657,6 +754,44 @@ const App: React.FC = () => {
     addLog(`${newScenes.length} B-Roll scenes injected.`, "success");
   };
 
+  // Scene delete with undo (UX7). Snapshots the scene + its asset + its
+  // position so a click on the toast restores everything to where it was.
+  const handleDeleteScene = (id: string) => {
+    const sceneIdx = project.scenes.findIndex(s => s.id === id);
+    if (sceneIdx < 0) return;
+    const scene = project.scenes[sceneIdx];
+    const asset = project.assets[id];
+    setProject(p => {
+      const newAssets = { ...p.assets };
+      delete newAssets[id];
+      return { ...p, scenes: p.scenes.filter(s => s.id !== id), assets: newAssets };
+    });
+    const toast: ToastItem = {
+      id: `undo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      type: 'info',
+      message: `Scene #${sceneIdx + 1} deleted.`,
+      timestamp: Date.now(),
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          setProject(p => {
+            // Splice back into the original slot. If scenes shifted, fall back
+            // to appending so we never throw away the restoration.
+            const newScenes = [...p.scenes];
+            const insertAt = Math.min(sceneIdx, newScenes.length);
+            newScenes.splice(insertAt, 0, scene);
+            return {
+              ...p,
+              scenes: newScenes,
+              assets: asset ? { ...p.assets, [id]: asset } : p.assets,
+            };
+          });
+        },
+      },
+    };
+    setToasts(prev => [...prev, toast].slice(-5));
+  };
+
   const handleMoveScene = (id: string, direction: 'prev' | 'next') => {
     setProject(prev => {
       const idx = prev.scenes.findIndex(s => s.id === id);
@@ -802,6 +937,7 @@ const App: React.FC = () => {
                     <h2 className="text-2xl font-black text-white uppercase tracking-tighter font-mono italic">Production Control</h2>
                     <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.4em] mt-1">Uplink: Core Intelligence Alpha</p>
                   </div>
+                  <SaveIndicator state={saveState} />
                 </div>
 
                 <div className="flex bg-eclipse-black/40 p-1.5 rounded-2xl nm-inset-input border border-white/5 overflow-x-auto max-w-full scrollbar-hide">
@@ -975,7 +1111,7 @@ const App: React.FC = () => {
                           onExtend={handleExtendScene}
                           onUpdate={(id, s) => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === id ? s : sc) }))}
                           onMove={(dir) => handleMoveScene(scene.id, dir)}
-                          onDelete={(id) => setProject(p => ({ ...p, scenes: p.scenes.filter(s => s.id !== id) }))}
+                          onDelete={(id) => handleDeleteScene(id)}
                           onDuplicate={() => setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: crypto.randomUUID() }] }))}
                           onInspect={setInspectingScene}
                           onSelectVariant={handleSelectVariant}
