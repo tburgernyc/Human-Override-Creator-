@@ -42,7 +42,7 @@ const stripDataUriPrefix = (s: string): string => {
 // Routes all SDK calls through the secure API proxy, keeping the API key server-side.
 // In production (Vercel), uses the current page's origin so no env var is needed.
 // Locally, falls back to VITE_PROXY_URL or the Express dev proxy on port 3001.
-const PROXY_BASE_URL: string = (import.meta as any).env?.VITE_PROXY_URL ??
+const PROXY_BASE_URL: string = import.meta.env?.VITE_PROXY_URL ??
   (typeof window !== 'undefined'
     ? `${window.location.origin}/api/gemini`
     : 'http://localhost:3001/api/gemini');
@@ -72,12 +72,14 @@ const retryWithBackoff = async <T>(
 ): Promise<T> => {
   try {
     return await operation();
-  } catch (error: any) {
-    const err = error as any;
+  } catch (error) {
+    // The SDK throws plain Error subclasses but doesn't export a typed shape
+    // for `.status` / `.code`, so narrow defensively rather than cast to any (CH3).
+    const err = error as { status?: unknown; code?: unknown; message?: unknown };
     const isRateLimit =
-      err?.status === 429 ||
-      err?.code === 429 ||
-      (typeof err?.message === 'string' && (
+      err.status === 429 ||
+      err.code === 429 ||
+      (typeof err.message === 'string' && (
         err.message.includes('429') ||
         err.message.includes('quota') ||
         err.message.includes('RESOURCE_EXHAUSTED')
@@ -183,7 +185,7 @@ export const handleDirectorChat = async (message: string, currentProject: Projec
           })}\n\nUSER_MESSAGE: ${message}`
         }]
       }
-    ] as any,
+    ],
     config: {
       systemInstruction: OVERRIDE_BOT_SYSTEM_INSTRUCTION,
       tools: [{ functionDeclarations: tools }],
@@ -517,7 +519,7 @@ export const generateSceneVideo = async (imageBase64: string, prompt: string, as
     model: resolution === Resolution.FHD ? MODEL_NAMES.VIDEO : MODEL_NAMES.VIDEO_FAST,
     prompt: `${style}. ${prompt}. Subtle cinematic motion.`,
     image: { imageBytes: stripDataUriPrefix(imageBase64), mimeType: 'image/png' },
-    config: { numberOfVideos: 1, aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any, resolution }
+    config: { numberOfVideos: 1, aspectRatio: aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9', resolution }
   }), 60_000, 'Veo submission'));
 
   // Exponential backoff with 30s cap; total wall-clock budget 10 min.
@@ -556,7 +558,7 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
     config: {
       numberOfVideos: 1,
       resolution: '720p',
-      aspectRatio: (aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9') as any
+      aspectRatio: aspectRatio === AspectRatio.PORTRAIT ? '9:16' : '16:9'
     }
   }), 60_000, 'Veo extension submission'));
 
@@ -639,7 +641,7 @@ export const generateSceneAudio = async (lines: DialogueLine[], characters: Char
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             multiSpeakerVoiceConfig: {
-              speakerVoiceConfigs: speakerConfigs as any
+              speakerVoiceConfigs: speakerConfigs
             }
           }
         }
@@ -851,6 +853,6 @@ export const decodeAudioRaw = async (data: Uint8Array, ctx: AudioContext, sample
 
 export const generateVideoScript = async (topic: string): Promise<string> => {
   const ai = getAIClient();
-  const res = await ai.models.generateContent({ model: MODEL_NAMES.THINKING, contents: `High-quality video script: ${topic}. Use [Scene: ...] format.`, config: { thinkingBudget: 4000 } } as any);
+  const res = await ai.models.generateContent({ model: MODEL_NAMES.THINKING, contents: `High-quality video script: ${topic}. Use [Scene: ...] format.`, config: { thinkingConfig: { thinkingBudget: 4000 } } });
   return res.text || "";
 };
