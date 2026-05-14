@@ -5,6 +5,11 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { pipeline } from 'node:stream/promises';
+import ffmpegStatic from 'ffmpeg-static';
 
 const app = express();
 
@@ -141,8 +146,10 @@ const geminiLimiter = rateLimit({
     message: { error: 'Rate limit exceeded', message: 'Too many Gemini requests; try again in a minute.' },
 });
 
-// Proxy all Gemini API requests — the key is injected server-side
-app.all('/api/gemini/*', geminiLimiter, async (req, res) => {
+// Proxy all Gemini API requests — the key is injected server-side. Express 5 +
+// path-to-regexp v8 require named splats (the bare `*` from Express 4 is no
+// longer valid syntax and crashes server startup).
+app.all('/api/gemini/*tail', geminiLimiter, async (req, res) => {
     if (blockIfUnconfigured(res)) return;
     try {
         // Use req.path instead of req.params to be compatible with Express 4 & 5 wildcard semantics.
@@ -234,6 +241,114 @@ app.get('/api/download', geminiLimiter, async (req, res) => {
     } catch (error: any) {
         console.error('Download proxy error:', error.message);
         res.status(500).json({ error: 'Download proxy failed', details: error.message });
+    }
+});
+
+// MP4 transcode (G1/G2/G3 — Phase 12). Accepts a WebM blob, returns an MP4
+// with H.264 + AAC, +faststart for streaming playback, and a two-pass
+// loudnorm filter targeting -14 LUFS integrated / -1 dBTP. The two-pass
+// approach (measure → apply) hits the target within ±0.5 LU, vs single-pass
+// which can drift by 1-2 LU on dynamic material.
+//
+// Streaming end-to-end isn't possible because (a) loudnorm pass 2 needs to
+// re-read the input and (b) +faststart needs ffmpeg to rewrite the moov atom
+// at the file head. We write to a temp dir (Railway has writable /tmp) and
+// clean up in a `finally` so failures don't leak.
+
+// Stricter rate limit than the Gemini endpoints — transcode is CPU-heavy and
+// a small handful of concurrent calls can pin a shared host.
+const transcodeLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 6,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Transcode rate limit exceeded', message: 'Too many transcode requests; try again in a minute.' },
+});
+
+// Run an ffmpeg invocation. Resolves with collected stderr (where loudnorm
+// prints its JSON measurements) on exit code 0; rejects with the stderr tail
+// on non-zero exit so the caller can surface a useful message.
+const runFfmpeg = (args: string[]): Promise<string> => new Promise((resolve, reject) => {
+    if (!ffmpegStatic) { reject(new Error('ffmpeg binary not available')); return; }
+    const proc = spawn(ffmpegStatic, args);
+    let stderr = '';
+    proc.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    proc.on('error', reject);
+    proc.on('exit', code => {
+        if (code === 0) resolve(stderr);
+        else reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(-500)}`));
+    });
+});
+
+// loudnorm prints a JSON block to stderr near the end of pass 1. The block is
+// the last JSON object in stderr; pull it out by finding the last balanced
+// {...} run rather than relying on line position (ffmpeg's progress lines vary).
+const parseLoudnormJson = (stderr: string): Record<string, string> | null => {
+    const start = stderr.lastIndexOf('{');
+    const end = stderr.lastIndexOf('}');
+    if (start < 0 || end < 0 || end < start) return null;
+    try { return JSON.parse(stderr.slice(start, end + 1)); } catch { return null; }
+};
+
+app.post('/api/transcode', transcodeLimiter, async (req, res) => {
+    if (!ffmpegStatic) {
+        res.status(503).json({ error: 'Transcoder unavailable', message: 'ffmpeg binary missing from this build.' });
+        return;
+    }
+    let tmpDir: string | null = null;
+    try {
+        tmpDir = await mkdtemp(path.join(tmpdir(), 'transcode-'));
+        const inputPath = path.join(tmpDir, 'in.webm');
+        const outputPath = path.join(tmpDir, 'out.mp4');
+
+        // Pull the raw request body into a temp file. The client posts
+        // application/octet-stream so the express.json middleware passes it
+        // through untouched and req is a usable Readable stream.
+        await pipeline(req, fs.createWriteStream(inputPath));
+
+        // Pass 1 — measure loudness. -f null pipes the encode to nowhere; we
+        // only want loudnorm's JSON report on stderr.
+        const pass1Stderr = await runFfmpeg([
+            '-hide_banner', '-nostats',
+            '-i', inputPath,
+            '-af', 'loudnorm=I=-14:TP=-1:LRA=11:print_format=json',
+            '-f', 'null', '-',
+        ]);
+        const m = parseLoudnormJson(pass1Stderr);
+
+        // Pass 2 — transcode with measurements applied. linear=true uses a
+        // single linear-scaler gain (preserves dynamics) instead of dynamic
+        // range compression; that matches what we want for already-mastered
+        // mixed audio. If pass 1 parsing failed for any reason, fall back to
+        // single-pass loudnorm rather than failing the whole transcode.
+        const loudnormFilter = m
+            ? `loudnorm=I=-14:TP=-1:LRA=11:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true:print_format=summary`
+            : 'loudnorm=I=-14:TP=-1:LRA=11:print_format=summary';
+
+        await runFfmpeg([
+            '-hide_banner', '-nostats', '-y',
+            '-i', inputPath,
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-crf', '18',
+            '-pix_fmt', 'yuv420p',  // YouTube prefers 4:2:0 chroma subsampling
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-af', loudnormFilter,
+            '-movflags', '+faststart',  // moov atom at head — instant playback
+            outputPath,
+        ]);
+
+        res.setHeader('Content-Type', 'video/mp4');
+        res.setHeader('Content-Disposition', 'attachment; filename="master.mp4"');
+        await pipeline(fs.createReadStream(outputPath), res);
+    } catch (error: any) {
+        console.error('Transcode failed:', error.message);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Transcode failed', message: error.message?.slice(0, 500) || 'unknown error' });
+        }
+    } finally {
+        if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
 });
 

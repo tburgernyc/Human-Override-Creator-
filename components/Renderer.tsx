@@ -184,6 +184,13 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     const [progress, setProgress] = useState(0);
     const [finalUrl, setFinalUrl] = useState<string | null>(null);
     const [finalMimeType, setFinalMimeType] = useState<string | null>(null);
+    // Transcode-to-MP4 state for the post-render "Download Master (MP4)" flow (G1
+    // client side). The transcode endpoint streams the WebM up, returns MP4
+    // with -14 LUFS audio and +faststart for instant playback; this lifts the
+    // user out of the "WebM-only export" gap.
+    const [transcodeState, setTranscodeState] = useState<'idle' | 'transcoding' | 'failed'>('idle');
+    const [transcodeError, setTranscodeError] = useState<string | null>(null);
+    const [mp4Url, setMp4Url] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
     const [etaSec, setEtaSec] = useState<number | null>(null);
@@ -904,6 +911,43 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [scenes, assets]);
 
+    // POST the rendered WebM blob to /api/transcode, receive an MP4 back
+    // (G1 client side). Server handles ffmpeg + LUFS normalization (G2/G3).
+    // On success, swap the displayed download button to point at the MP4 blob.
+    const handleTranscodeToMp4 = async () => {
+        if (!finalUrl || transcodeState === 'transcoding') return;
+        setTranscodeState('transcoding');
+        setTranscodeError(null);
+        try {
+            const sourceBlob = await (await fetch(finalUrl)).blob();
+            const resp = await fetch('/api/transcode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: sourceBlob,
+            });
+            if (!resp.ok) {
+                let detail = `HTTP ${resp.status}`;
+                try { const j = await resp.json(); detail = j.message || j.error || detail; } catch {}
+                throw new Error(detail);
+            }
+            const mp4Blob = await resp.blob();
+            const url = URL.createObjectURL(mp4Blob);
+            setMp4Url(url);
+            setTranscodeState('idle');
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error('Transcode failed:', e);
+            setTranscodeError(msg);
+            setTranscodeState('failed');
+        }
+    };
+
+    // Free the MP4 blob URL when the component unmounts (or after a re-render
+    // swaps it). The WebM url is freed by the existing onComplete consumer.
+    useEffect(() => () => {
+        if (mp4Url) URL.revokeObjectURL(mp4Url);
+    }, [mp4Url]);
+
     return (
         <div className="fixed inset-0 bg-eclipse-black/98 flex flex-col items-center justify-center z-[500] backdrop-blur-3xl p-6">
             {renderState === 'error' ? (
@@ -923,7 +967,35 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                     <h2 className="text-4xl font-bold text-white mb-4 uppercase font-mono italic">Compile Sequence Finalized</h2>
                     <p className="text-mystic-gray mb-12 text-sm uppercase tracking-widest font-bold">Neural tracks merged. Video unit ready for distribution.</p>
                     <div className="flex flex-col gap-4">
-                        <a href={finalUrl!} download={`master_production_unit.${fileExtensionFor(finalMimeType)}`} className="bg-gold-gradient text-white py-6 rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-xl hover:scale-[1.02] transition-all text-center">Download Master Unit</a>
+                        {mp4Url ? (
+                            <a href={mp4Url} download="master_production_unit.mp4" className="bg-gold-gradient text-white py-6 rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-xl hover:scale-[1.02] transition-all text-center">
+                                <i className="fa-solid fa-download mr-2"></i>Download Master Unit (MP4)
+                            </a>
+                        ) : (
+                            <button
+                                onClick={handleTranscodeToMp4}
+                                disabled={transcodeState === 'transcoding'}
+                                className={`py-6 rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-xl transition-all text-center ${transcodeState === 'transcoding' ? 'bg-white/5 text-celestial-stone cursor-wait' : 'bg-gold-gradient text-white hover:scale-[1.02]'}`}
+                            >
+                                {transcodeState === 'transcoding' ? (
+                                    <><i className="fa-solid fa-circle-notch fa-spin mr-2"></i>Encoding MP4… (-14 LUFS)</>
+                                ) : (
+                                    <><i className="fa-solid fa-wand-magic-sparkles mr-2"></i>Encode &amp; Download Master (MP4)</>
+                                )}
+                            </button>
+                        )}
+                        {transcodeState === 'failed' && (
+                            <p className="text-[10px] text-solar-amber uppercase tracking-widest font-bold">
+                                <i className="fa-solid fa-triangle-exclamation mr-2"></i>MP4 encode failed: {transcodeError}. Download source instead.
+                            </p>
+                        )}
+                        <a
+                            href={finalUrl!}
+                            download={`master_production_unit.${fileExtensionFor(finalMimeType)}`}
+                            className="nm-button border border-white/10 text-celestial-stone hover:text-white py-3 rounded-xl text-[9px] font-bold uppercase tracking-widest transition-colors text-center"
+                        >
+                            Download Source ({fileExtensionFor(finalMimeType).toUpperCase()})
+                        </a>
                         <button onClick={onCancel} className="text-mystic-gray hover:text-white uppercase tracking-widest text-[9px] font-black py-4">Close Synthesis Lab</button>
                     </div>
                 </div>
