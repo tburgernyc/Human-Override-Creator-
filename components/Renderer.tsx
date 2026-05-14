@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Scene, GeneratedAssets, Resolution, AspectRatio, TextOverlay, ProjectState, TransitionType, CameraMotion, ColorGrade, LogEntry } from '../types';
+import { Scene, GeneratedAssets, Resolution, AspectRatio, TextOverlay, ProjectState, TransitionType, CameraMotion, ColorGrade, LogEntry, YoutubeMetadata } from '../types';
 import { decodeAudio } from '../services/gemini';
 import { pickMusicTrack, MusicMood } from '../constants';
 
@@ -54,6 +54,48 @@ const fileExtensionFor = (mime: string | null): string => {
     if (mime.includes('mp4')) return 'mp4';
     if (mime.includes('webm')) return 'webm';
     return 'video';
+};
+
+// Format milliseconds as SRT timestamp `HH:MM:SS,mmm` (comma decimal, not period).
+const formatSrtTime = (ms: number): string => {
+    const total = Math.max(0, Math.round(ms));
+    const h = Math.floor(total / 3_600_000);
+    const m = Math.floor((total % 3_600_000) / 60_000);
+    const s = Math.floor((total % 60_000) / 1000);
+    const milli = total % 1000;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(milli).padStart(3, '0')}`;
+};
+
+// Build an SRT caption track from scenes (G4). Each scene's narrator lines
+// split the scene duration evenly — we don't have per-line timing because
+// generateSceneAudio mixes them into one PCM buffer. "Even split" is a sensible
+// approximation that puts captions roughly on top of the spoken words.
+// Scenes with no lines emit nothing. Returns empty string if no captions exist.
+const buildSrt = (scenes: Scene[]): string => {
+    let cursorMs = 0;
+    let cueIndex = 0;
+    const cues: string[] = [];
+    for (const scene of scenes) {
+        const durMs = (scene.estimatedDuration || 5) * 1000;
+        const lines = (scene.narratorLines || []).filter(l => l.text?.trim());
+        if (lines.length === 0) {
+            cursorMs += durMs;
+            continue;
+        }
+        const slice = durMs / lines.length;
+        for (let i = 0; i < lines.length; i++) {
+            cueIndex++;
+            const start = cursorMs + i * slice;
+            const end = cursorMs + (i + 1) * slice;
+            // Escape angle brackets to avoid breaking players that try to
+            // render SRT styling tags; speaker prefix matches the on-screen
+            // dialogue card formatting.
+            const text = `${lines[i].speaker}: ${lines[i].text}`.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            cues.push(`${cueIndex}\n${formatSrtTime(start)} --> ${formatSrtTime(end)}\n${text}\n`);
+        }
+        cursorMs += durMs;
+    }
+    return cues.join('\n');
 };
 
 // Film grain plate generator (B7). Smaller plates stretched over the output
@@ -163,6 +205,10 @@ interface RendererProps {
     globalStyle: string;
     mastering?: ProjectState['mastering'];
     cinematicProfile?: ProjectState['cinematicProfile'];
+    // Project-level extras used by the post-render export bundle (Phase 13).
+    // Optional so callers that only care about the video can leave them off.
+    keyArtSceneId?: string;
+    metadata?: YoutubeMetadata;
     onComplete: (url: string) => void;
     onCancel: () => void;
     // Surface non-fatal warnings (music fetch/decode failures, etc.) up to App
@@ -173,7 +219,7 @@ interface RendererProps {
 
 type RenderState = 'initializing' | 'rendering' | 'validating' | 'complete' | 'error';
 
-export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, aspectRatio, globalStyle, mastering, cinematicProfile = 'natural', onComplete, onCancel, onLog }) => {
+export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, aspectRatio, globalStyle, mastering, cinematicProfile = 'natural', keyArtSceneId, metadata, onComplete, onCancel, onLog }) => {
     // Keep onLog stable across renders so we don't restart the render effect
     // every time the parent re-creates the closure.
     const onLogRef = useRef(onLog);
@@ -948,6 +994,61 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         if (mp4Url) URL.revokeObjectURL(mp4Url);
     }, [mp4Url]);
 
+    // Resolve the thumbnail asset: prefer the user-picked keyArt scene, fall
+    // back to the first scene with an imageUrl. data:-URI imageUrls can be
+    // used as anchor hrefs directly with `download=...` (G5).
+    const thumbnailScene = scenes.find(s => s.id === keyArtSceneId) ?? scenes.find(s => !!assets[s.id]?.imageUrl);
+    const thumbnailUrl = thumbnailScene ? assets[thumbnailScene.id]?.imageUrl : undefined;
+
+    // Pre-compute whether SRT captions exist so the button can disable when
+    // there's nothing to export — saves a misleading empty file (G4).
+    const hasCaptions = scenes.some(s => (s.narratorLines || []).some(l => l.text?.trim()));
+
+    // Trigger a download by creating a transient anchor + clicking it.
+    // Cleaner than mutating window.location, and works for blob: URLs.
+    const downloadBlob = (blob: Blob, filename: string) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+
+    const handleDownloadSrt = () => {
+        const srt = buildSrt(scenes);
+        if (!srt) return;
+        downloadBlob(new Blob([srt], { type: 'application/x-subrip' }), 'master_production_unit.srt');
+    };
+
+    // Build a YouTube Studio-friendly text block from project metadata (G6).
+    // The current YoutubeMetadata shape doesn't include description/tags — only
+    // hookScore, audience, and suggestedTitles — so what we export is somewhat
+    // limited. Better than nothing, and a future schema extension can fill it.
+    const handleDownloadMetadata = () => {
+        const titles = metadata?.suggestedTitles ?? [];
+        const lines = [
+            `# YouTube Upload Metadata — ${new Date().toISOString().slice(0, 10)}`,
+            '',
+            `TITLE (primary): ${titles[0] ?? '(none generated)'}`,
+            '',
+        ];
+        if (titles.length > 1) {
+            lines.push('ALTERNATE TITLES:');
+            for (const t of titles.slice(1)) lines.push(`- ${t}`);
+            lines.push('');
+        }
+        if (metadata?.audience) lines.push(`AUDIENCE: ${metadata.audience}`, '');
+        if (typeof metadata?.hookScore === 'number') lines.push(`HOOK SCORE: ${metadata.hookScore}/10`, '');
+        lines.push('--- DESCRIPTION ---', '');
+        lines.push('[Paste your description here. The current schema doesn\'t generate one yet.]', '');
+        lines.push('--- TAGS ---', '');
+        lines.push('[Paste comma-separated tags here.]', '');
+        downloadBlob(new Blob([lines.join('\n')], { type: 'text/plain' }), 'master_production_unit_metadata.txt');
+    };
+
     return (
         <div className="fixed inset-0 bg-eclipse-black/98 flex flex-col items-center justify-center z-[500] backdrop-blur-3xl p-6">
             {renderState === 'error' ? (
@@ -996,6 +1097,47 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                         >
                             Download Source ({fileExtensionFor(finalMimeType).toUpperCase()})
                         </a>
+                        {/* Phase 13 export bundle — SRT captions, thumbnail, metadata. */}
+                        <div className="grid grid-cols-3 gap-2 mt-2">
+                            <button
+                                onClick={handleDownloadSrt}
+                                disabled={!hasCaptions}
+                                title={hasCaptions ? 'Download SRT caption track' : 'No narrator lines in any scene — nothing to caption'}
+                                className={`nm-button border rounded-xl py-3 text-[9px] font-bold uppercase tracking-widest transition-colors flex flex-col items-center justify-center gap-1 ${hasCaptions ? 'border-white/10 text-celestial-stone hover:text-white' : 'border-white/5 text-mystic-gray/40 cursor-not-allowed'}`}
+                            >
+                                <i className="fa-solid fa-closed-captioning text-sm"></i>
+                                Captions (.srt)
+                            </button>
+                            {thumbnailUrl ? (
+                                <a
+                                    href={thumbnailUrl}
+                                    download="master_production_unit_thumbnail.png"
+                                    title="Download thumbnail image"
+                                    className="nm-button border border-white/10 rounded-xl py-3 text-[9px] font-bold uppercase tracking-widest text-celestial-stone hover:text-white transition-colors flex flex-col items-center justify-center gap-1"
+                                >
+                                    <i className="fa-solid fa-image text-sm"></i>
+                                    Thumbnail
+                                </a>
+                            ) : (
+                                <button
+                                    disabled
+                                    title="No scene image available yet"
+                                    className="nm-button border border-white/5 rounded-xl py-3 text-[9px] font-bold uppercase tracking-widest text-mystic-gray/40 cursor-not-allowed flex flex-col items-center justify-center gap-1"
+                                >
+                                    <i className="fa-solid fa-image text-sm"></i>
+                                    Thumbnail
+                                </button>
+                            )}
+                            <button
+                                onClick={handleDownloadMetadata}
+                                disabled={!metadata}
+                                title={metadata ? 'Download YouTube metadata as .txt' : 'No YouTube metadata generated yet'}
+                                className={`nm-button border rounded-xl py-3 text-[9px] font-bold uppercase tracking-widest transition-colors flex flex-col items-center justify-center gap-1 ${metadata ? 'border-white/10 text-celestial-stone hover:text-white' : 'border-white/5 text-mystic-gray/40 cursor-not-allowed'}`}
+                            >
+                                <i className="fa-solid fa-tags text-sm"></i>
+                                Metadata
+                            </button>
+                        </div>
                         <button onClick={onCancel} className="text-mystic-gray hover:text-white uppercase tracking-widest text-[9px] font-black py-4">Close Synthesis Lab</button>
                     </div>
                 </div>

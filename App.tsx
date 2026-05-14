@@ -653,6 +653,15 @@ const App: React.FC = () => {
       addLog(`Scene #${project.scenes.indexOf(scene) + 1} is already generating — extension request ignored.`, 'system');
       return;
     }
+    // Veo's extension API only outputs 720p. In an FHD project the extended
+    // portion will be visibly softer than the rest of the timeline — warn
+    // before committing so users aren't surprised on render (G7).
+    if (resolution === Resolution.FHD) {
+      const proceed = window.confirm(
+        `Heads up: Veo's extension only outputs 720p, but this project is set to 1080p.\n\nThe extended portion of Scene #${project.scenes.indexOf(scene) + 1} will appear softer than the rest of your timeline.\n\nContinue?`
+      );
+      if (!proceed) return;
+    }
     inFlightScenesRef.current.add(sceneId);
 
     addLog(`Extending temporal sequence for Scene #${project.scenes.indexOf(scene) + 1}`, "system");
@@ -1275,7 +1284,7 @@ const App: React.FC = () => {
       {showMastering && <VFXMaster mastering={project.mastering} cinematicProfile={project.cinematicProfile} onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))} onClose={() => setShowMastering(false)} />}
       {project.activeDraft && <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />}
       {showPlayer && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => setShowPlayer(false)} />}
-      {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} onCancel={() => setShowRenderer(false)} onComplete={() => { }} onLog={addLog} />}
+      {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} keyArtSceneId={project.keyArtSceneId} metadata={project.youtubeMetadata} onCancel={() => setShowRenderer(false)} onComplete={() => { }} onLog={addLog} />}
       {showManifest && <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata ?? null} onClose={() => setShowManifest(false)} />}
 
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} onCancel={handleCancelBatch} isCancelling={isCancellingBatch} />
