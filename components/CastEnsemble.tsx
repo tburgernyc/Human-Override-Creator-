@@ -49,7 +49,18 @@ export const CastEnsemble: React.FC<CastEnsembleProps> = ({ characters, onEdit, 
             >
               <div className="relative w-20 h-20 rounded-full nm-button p-[3px] transition-all group-hover:scale-105">
                 <div className="relative w-full h-full rounded-full bg-eclipse-black overflow-hidden border border-white/5">
-                  {char.referenceImageBase64 ? (
+                  {char.turnaroundSheetBase64 ? (
+                    // Phase 14: turnaround sheets are 3:1; object-cover scales
+                    // height-to-fit so the image is 3x wider than the square
+                    // container, then object-position pins the left (front)
+                    // panel inside the visible circle.
+                    <img
+                      src={char.turnaroundSheetBase64}
+                      className="w-full h-full object-cover"
+                      style={{ objectPosition: 'left center' }}
+                      alt={char.name}
+                    />
+                  ) : char.referenceImageBase64 ? (
                     <img src={char.referenceImageBase64} className="w-full h-full object-cover" alt={char.name} />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-luna-gold/20">

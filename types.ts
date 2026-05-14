@@ -11,6 +11,9 @@ export interface Character {
     pitch: number;
   };
   referenceImageBase64?: string;
+  // 3:1 composite (front | 3/4 | profile) used by Veo when present;
+  // referenceImageBase64 is kept as a fallback for projects pre-Phase-14.
+  turnaroundSheetBase64?: string;
 }
 
 export interface TextOverlay {
@@ -176,9 +179,21 @@ export interface ProjectState {
     vignetteIntensity: number;
     lightLeakIntensity: number;
     filmBurnIntensity: number;
-    lutPreset?: 'none' | 'kodak_5219' | 'fuji_400h' | 'noir' | 'technicolor';
+    lutPreset?: LutPreset;
   };
 }
+
+// Phase 14: real .cube file LUTs applied at transcode. Old enum values map
+// to these via normalizeLutPreset() in App.tsx at read time.
+export const LUT_PRESETS = [
+  'none',
+  'kodak_vision3_250d',
+  'fuji_eterna_250d',
+  'kodak_2383',
+  'arri_logc_to_rec709',
+  'bleach_bypass',
+] as const;
+export type LutPreset = typeof LUT_PRESETS[number];
 
 export enum AspectRatio {
   SQUARE = "1:1",

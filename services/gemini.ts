@@ -442,9 +442,36 @@ export const generateCharacterImage = async (character: Character, resolution: R
   return `data:image/png;base64,${data}`;
 };
 
+// Phase 14 G8: a 3-panel turnaround sheet (front | 3-quarter | profile) baked
+// into a single ultra-wide image. Veo's identity preservation drops past ~30°
+// off-axis with only a front portrait, so scenes that pan across a character
+// can render a different face. Feeding the model all three angles in one
+// reference lets the per-scene image generator pick whichever panel matches
+// the shot framing.
+//
+// Aspect ratio is 21:9 (the closest ultra-wide the Gemini image API accepts).
+// The original Phase-14 plan called for 3:1, but Gemini's imageConfig.aspectRatio
+// rejects 3:1 with 400 INVALID_ARGUMENT; 21:9 (≈ 2.33:1) is the supported
+// substitute. Each of the 3 panels ends up at ~7:9 (portrait-ish) — narrower
+// than a square, which is actually fine for head-and-shoulders shots.
+export const generateCharacterTurnaround = async (character: Character, style: string, seed?: number): Promise<string> => {
+  const ai = getAIClient();
+  const response = await retryWithBackoff(() => ai.models.generateContent({
+    model: MODEL_NAMES.IMAGE,
+    contents: `${style} 3-panel character turnaround sheet of ${character.name}. Equal-sized horizontal panels left-to-right: (1) front view, (2) three-quarter view turned 45° to the camera-left, (3) full profile facing camera-left. Same outfit, same lighting, same identity in all three. ${character.visualPrompt}. Plain neutral grey background, photorealistic facial features, professional studio lighting. No text, no labels.`,
+    config: { imageConfig: { aspectRatio: "21:9" }, seed }
+  }));
+  const data = response.candidates?.[0]?.content?.parts.find(p => p.inlineData)?.inlineData?.data;
+  if (!data) throw new Error('Character turnaround generation returned no data. The prompt may have been safety-filtered.');
+  return `data:image/png;base64,${data}`;
+};
+
 // Generates reference images for a batch of characters with bounded concurrency.
 // Reports per-character completion via onComplete so the UI can update progressively.
-// Characters with an existing referenceImageBase64 are skipped.
+// Phase 14: writes a 21:9 turnaround sheet to `turnaroundSheetBase64`.
+// Characters with an existing turnaround sheet are skipped (legacy single
+// `referenceImageBase64` does NOT block regeneration — a user upgrading a
+// pre-Phase-14 project should get the better sheet).
 export const generateCharacterRefsConcurrent = async (
   characters: Character[],
   style: string,
@@ -459,12 +486,12 @@ export const generateCharacterRefsConcurrent = async (
     while (cursor < characters.length) {
       const myIdx = cursor++;
       const char = characters[myIdx];
-      if (char.referenceImageBase64) continue;
+      if (char.turnaroundSheetBase64) continue;
       try {
         const charSeed = productionSeed + myIdx * 7919; // distinct seed per character
-        const img = await generateCharacterImage(char, Resolution.HD, style, charSeed);
-        result[myIdx] = { ...char, referenceImageBase64: img };
-        onComplete(char.id, img);
+        const sheet = await generateCharacterTurnaround(char, style, charSeed);
+        result[myIdx] = { ...char, turnaroundSheetBase64: sheet };
+        onComplete(char.id, sheet);
       } catch (e) {
         onComplete(char.id, undefined, e instanceof Error ? e : new Error('character ref generation failed'));
       }
@@ -485,9 +512,16 @@ export const generateSceneImage = async (scene: Scene, characters: Character[], 
     parts.push({ text: "Use this image as a Master Style Reference for color palette and lighting." });
   }
 
-  characters.filter(c => scene.charactersInScene.includes(c.name) && c.referenceImageBase64).forEach(c => {
-    parts.push({ inlineData: { mimeType: 'image/png', data: stripDataUriPrefix(c.referenceImageBase64!) } });
-    parts.push({ text: `Maintain visual consistency for character: ${c.name}.` });
+  // Phase 14: prefer the 3-panel turnaround sheet when present (better identity
+  // preservation at off-axis camera angles). Fall back to the legacy single
+  // portrait for pre-Phase-14 projects that haven't been regenerated yet.
+  characters.filter(c => scene.charactersInScene.includes(c.name) && (c.turnaroundSheetBase64 || c.referenceImageBase64)).forEach(c => {
+    const sheet = c.turnaroundSheetBase64;
+    const ref = sheet || c.referenceImageBase64!;
+    parts.push({ inlineData: { mimeType: 'image/png', data: stripDataUriPrefix(ref) } });
+    parts.push({ text: sheet
+      ? `This is a turnaround sheet for ${c.name}. Use whichever panel angle (front, 3/4, or profile) best matches the camera framing of this scene. Maintain identity across all panels.`
+      : `Maintain visual consistency for character: ${c.name}.` });
   });
 
   parts.push({ text: `Style: ${style}. Scene Description: ${scene.visualPrompt}. ${feedback || ''}. Cinematic 8k rendering. High quality textures.` });

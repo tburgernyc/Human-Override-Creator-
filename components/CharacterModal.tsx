@@ -73,23 +73,45 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClo
             <div className="glass-panel w-full max-w-2xl rounded-3xl overflow-hidden border-luna-gold/20 shadow-2xl flex flex-col md:flex-row">
                 {/* Character Preview Column */}
                 <div className="w-full md:w-56 bg-eclipse-light p-6 flex flex-col items-center border-b md:border-b-0 md:border-r border-white/5">
-                    <div className="w-40 h-40 rounded-2xl overflow-hidden border border-luna-gold/30 mb-6 group relative">
-                        {character.referenceImageBase64 ? (
-                            <img src={character.referenceImageBase64} className="w-full h-full object-cover" alt={character.name} />
-                        ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-eclipse-black text-mystic-gray">
-                                <i className="fa-solid fa-user-astronaut text-3xl"></i>
-                            </div>
-                        )}
-                        <button
-                            onClick={handleRegenerate}
-                            disabled={isRegenerating}
-                            title={isRegenerating ? 'Regenerating reference image…' : 'Regenerate reference image'}
-                            className={`absolute inset-0 bg-black/60 flex items-center justify-center transition-opacity ${isRegenerating ? 'opacity-100 cursor-wait' : 'opacity-0 group-hover:opacity-100'}`}
-                        >
-                            <i className={`fa-solid ${isRegenerating ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles'} text-white text-xl`}></i>
-                        </button>
-                    </div>
+                    {/* Phase 14: when a 3-panel turnaround sheet exists, show it
+                        at 3:1 (full-width strip) so the user can see all three
+                        angles. Fall back to the legacy 1:1 portrait for projects
+                        that haven't been regenerated yet. */}
+                    {character.turnaroundSheetBase64 ? (
+                        // Strip preview matches the generator's 21:9 output ratio
+                        // (Gemini image API doesn't support 3:1; closest supported
+                        // ultra-wide is 21:9 — see services/gemini.ts
+                        // generateCharacterTurnaround). 224px × 21/9 ≈ 96px.
+                        <div className="w-full h-24 rounded-2xl overflow-hidden border border-luna-gold/30 mb-6 group relative">
+                            <img src={character.turnaroundSheetBase64} className="w-full h-full object-cover" alt={`${character.name} turnaround`} />
+                            <button
+                                onClick={handleRegenerate}
+                                disabled={isRegenerating}
+                                title={isRegenerating ? 'Regenerating turnaround sheet…' : 'Regenerate turnaround sheet'}
+                                className={`absolute inset-0 bg-black/60 flex items-center justify-center transition-opacity ${isRegenerating ? 'opacity-100 cursor-wait' : 'opacity-0 group-hover:opacity-100'}`}
+                            >
+                                <i className={`fa-solid ${isRegenerating ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles'} text-white text-xl`}></i>
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="w-40 h-40 rounded-2xl overflow-hidden border border-luna-gold/30 mb-6 group relative">
+                            {character.referenceImageBase64 ? (
+                                <img src={character.referenceImageBase64} className="w-full h-full object-cover" alt={character.name} />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-eclipse-black text-mystic-gray">
+                                    <i className="fa-solid fa-user-astronaut text-3xl"></i>
+                                </div>
+                            )}
+                            <button
+                                onClick={handleRegenerate}
+                                disabled={isRegenerating}
+                                title={isRegenerating ? 'Regenerating reference image…' : 'Regenerate reference image'}
+                                className={`absolute inset-0 bg-black/60 flex items-center justify-center transition-opacity ${isRegenerating ? 'opacity-100 cursor-wait' : 'opacity-0 group-hover:opacity-100'}`}
+                            >
+                                <i className={`fa-solid ${isRegenerating ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles'} text-white text-xl`}></i>
+                            </button>
+                        </div>
+                    )}
                     <p className="text-white font-bold text-center mb-1">{character.name}</p>
                     <p className="text-[10px] text-mystic-gray uppercase tracking-widest font-mono">ID: {character.id}</p>
                 </div>

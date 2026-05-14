@@ -28,7 +28,7 @@ import { ScriptDoctor } from './components/ScriptDoctor';
 import { VFXMaster } from './components/VFXMaster';
 import { Moodboard } from './components/Moodboard';
 import { ProductionStageOverview } from './components/ProductionStageOverview';
-import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft } from './types';
+import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft, LutPreset, LUT_PRESETS } from './types';
 import {
   analyzeScript,
   generateCharacterImage,
@@ -91,6 +91,20 @@ const makeDefaultProject = (): ProjectState => ({
   }
 });
 
+// Phase 14: old `lutPreset` values map to the new filmstock-named enum at read
+// time. Don't write back — let the next save persist the normalized value.
+const LEGACY_LUT_MAP: Record<string, LutPreset> = {
+  kodak_5219:  'kodak_vision3_250d',
+  fuji_400h:   'fuji_eterna_250d',
+  noir:        'bleach_bypass',
+  technicolor: 'kodak_2383',
+};
+const normalizeLutPreset = (raw: unknown): LutPreset => {
+  if (typeof raw !== 'string' || raw === 'none') return 'none';
+  if ((LUT_PRESETS as readonly string[]).includes(raw)) return raw as LutPreset;
+  return LEGACY_LUT_MAP[raw] ?? 'none';
+};
+
 // Brings archived projects forward through schema changes (new fields, renamed
 // keys, missing arrays). Without this, loading a pre-Phase-1 archive surfaces
 // undefined where the UI expects arrays/objects, breaking the dashboard.
@@ -106,7 +120,7 @@ const migrateProject = (raw: any): ProjectState => {
     // Always start with empty assets — base64 binaries are too large for
     // localStorage and IndexedDB recovery (Phase 4.2) is the canonical source.
     assets: {},
-    mastering: { ...defaults.mastering!, ...(raw.mastering || {}) },
+    mastering: { ...defaults.mastering!, ...(raw.mastering || {}), lutPreset: normalizeLutPreset(raw.mastering?.lutPreset) },
     modules: (raw.modules && typeof raw.modules === 'object') ? raw.modules : {},
     productionLog: Array.isArray(raw.productionLog) ? raw.productionLog : [],
     characters: Array.isArray(raw.characters) ? raw.characters : [],

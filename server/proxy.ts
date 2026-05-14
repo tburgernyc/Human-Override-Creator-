@@ -11,6 +11,11 @@ import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import ffmpegStatic from 'ffmpeg-static';
 
+// Resolve `server/` directory once at module load; used for both the prod
+// static-bundle path and the Phase-14 LUTs directory lookup.
+const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
+const LUTS_DIR = path.resolve(SERVER_DIR, '..', 'public', 'luts');
+
 const app = express();
 
 // On Railway/Render/Fly the request reaches us through their load balancer, so
@@ -176,7 +181,19 @@ app.all('/api/gemini/*tail', geminiLimiter, async (req, res) => {
         const data = await response.text();
 
         if (!response.ok) {
-            console.warn(`Gemini upstream error ${response.status}: ${data.slice(0, 200)}`);
+            // Build a redacted URL (strip the API key) for safe logging. The
+            // upstream URL is the most useful debug signal for 4xx/5xx but
+            // includes our key in the query string.
+            const safeUrl = new URL(url.toString());
+            safeUrl.searchParams.delete('key');
+            const bodyPreview = fetchOptions.body
+                ? `\n  body: ${String(fetchOptions.body).slice(0, 300)}`
+                : '';
+            console.warn(
+                `Gemini upstream error ${response.status} ${response.statusText || ''}\n` +
+                `  ${req.method} ${safeUrl.toString()}${bodyPreview}\n` +
+                `  resp: ${data.slice(0, 300)}`
+            );
         }
 
         res.status(response.status)
@@ -280,6 +297,31 @@ const runFfmpeg = (args: string[]): Promise<string> => new Promise((resolve, rej
     });
 });
 
+// Phase 14: real .cube file LUT preset names. Kept in sync with the
+// `LUT_PRESETS` constant in `types.ts` — duplicated here so the server stays
+// standalone (server/tsconfig.json doesn't include parent files).
+const LUT_PRESETS = [
+    'none',
+    'kodak_vision3_250d',
+    'fuji_eterna_250d',
+    'kodak_2383',
+    'arri_logc_to_rec709',
+    'bleach_bypass',
+] as const;
+
+// Build the ffmpeg `lut3d='...'` filter argument for a given preset. Returns
+// null when no LUT should be applied (preset is 'none', invalid, or the .cube
+// file is missing — silent downgrade so a missing asset doesn't abort the
+// whole transcode). Single-quoting the path avoids escaping issues with
+// colons in Windows / WSL absolute paths.
+const buildLutArg = (preset: string, lutsDir: string): { arg: string; preset: string } | null => {
+    if (!preset || preset === 'none') return null;
+    if (!(LUT_PRESETS as readonly string[]).includes(preset)) return null;
+    const filePath = path.join(lutsDir, `${preset}.cube`);
+    if (!fs.existsSync(filePath)) return null;
+    return { arg: `lut3d='${filePath}'`, preset };
+};
+
 // loudnorm prints a JSON block to stderr near the end of pass 1. The block is
 // the last JSON object in stderr; pull it out by finding the last balanced
 // {...} run rather than relying on line position (ffmpeg's progress lines vary).
@@ -306,6 +348,12 @@ app.post('/api/transcode', transcodeLimiter, async (req, res) => {
         // through untouched and req is a usable Readable stream.
         await pipeline(req, fs.createWriteStream(inputPath));
 
+        // Phase 14: resolve the requested LUT (query string, not body — the
+        // body is the raw WebM stream). Missing file or unknown preset is a
+        // silent downgrade so a stale asset doesn't break the user's render.
+        const rawLutPreset = typeof req.query.lutPreset === 'string' ? req.query.lutPreset : '';
+        const lut = buildLutArg(rawLutPreset, LUTS_DIR);
+
         // Pass 1 — measure loudness. -f null pipes the encode to nowhere; we
         // only want loudnorm's JSON report on stderr.
         const pass1Stderr = await runFfmpeg([
@@ -325,7 +373,7 @@ app.post('/api/transcode', transcodeLimiter, async (req, res) => {
             ? `loudnorm=I=-14:TP=-1:LRA=11:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true:print_format=summary`
             : 'loudnorm=I=-14:TP=-1:LRA=11:print_format=summary';
 
-        await runFfmpeg([
+        const pass2Args: string[] = [
             '-hide_banner', '-nostats', '-y',
             '-i', inputPath,
             '-c:v', 'libx264',
@@ -336,8 +384,22 @@ app.post('/api/transcode', transcodeLimiter, async (req, res) => {
             '-b:a', '192k',
             '-af', loudnormFilter,
             '-movflags', '+faststart',  // moov atom at head — instant playback
-            outputPath,
-        ]);
+        ];
+        if (lut) {
+            // Splice the LUT video filter in before the output path. Pass 2
+            // only — pass 1 measures audio and doesn't read video frames.
+            pass2Args.splice(pass2Args.length, 0, '-vf', lut.arg);
+        }
+        pass2Args.push(outputPath);
+
+        await runFfmpeg(pass2Args);
+
+        // Phase 14: surface whether the LUT was actually applied. The body
+        // is the streamed MP4, so metadata rides on response headers.
+        res.setHeader('X-LUT-Applied', lut ? 'true' : 'false');
+        res.setHeader('X-LUT-Preset', lut ? lut.preset : 'none');
+        // Allow the browser to read these custom headers from a fetch().
+        res.setHeader('Access-Control-Expose-Headers', 'X-LUT-Applied, X-LUT-Preset');
 
         res.setHeader('Content-Type', 'video/mp4');
         res.setHeader('Content-Disposition', 'attachment; filename="master.mp4"');
@@ -355,9 +417,7 @@ app.post('/api/transcode', transcodeLimiter, async (req, res) => {
 // In production we also serve the static frontend bundle. Vite outputs to
 // `dist/` next to this server file's package root.
 if (IS_PROD) {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const distDir = path.resolve(__dirname, '..', 'dist');
+    const distDir = path.resolve(SERVER_DIR, '..', 'dist');
     if (fs.existsSync(distDir)) {
         app.use(express.static(distDir));
         // SPA fallback — anything that's not an API route returns index.html

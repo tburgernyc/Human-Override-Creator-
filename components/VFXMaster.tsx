@@ -25,17 +25,17 @@ export const VFXMaster: React.FC<VFXMasterProps> = ({
     { id: 'noir', label: 'Noir', desc: 'Dramatic shadows and monochrome textures.' }
   ];
 
-  // Labels describe what the CSS filter actually does (B6). The presets were
-  // formerly named after real film stocks (Kodak Vision3, Fuji 400H,
-  // Technicolor IV) but the implementation is a stack of CSS canvas filters,
-  // not a real 3D LUT — calling them film names overstated the fidelity.
-  // IDs are preserved so existing saved projects keep their selection.
+  // Phase 14: real 3D LUTs (.cube files) are applied server-side during
+  // /api/transcode. The browser preview still uses CSS-filter approximations
+  // tuned per preset — they're directional, not pixel-accurate. The final
+  // MP4 carries the real .cube look; preview is just a hint.
   const luts = [
-    { id: 'none', label: 'Bypass (None)' },
-    { id: 'kodak_5219', label: 'Warm Contrast' },
-    { id: 'fuji_400h', label: 'Soft Pastel' },
-    { id: 'noir', label: 'High-Contrast B&W' },
-    { id: 'technicolor', label: 'Vivid Saturation' }
+    { id: 'none',                  label: 'Bypass (None)' },
+    { id: 'kodak_vision3_250d',    label: 'Kodak Vision3 250D' },
+    { id: 'fuji_eterna_250d',      label: 'Fuji Eterna 250D' },
+    { id: 'kodak_2383',            label: 'Kodak 2383 Print' },
+    { id: 'arri_logc_to_rec709',   label: 'ARRI LogC → Rec.709' },
+    { id: 'bleach_bypass',         label: 'Bleach Bypass' }
   ];
 
   return (

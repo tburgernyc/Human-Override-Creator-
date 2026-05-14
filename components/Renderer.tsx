@@ -298,13 +298,15 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         if (liveCinematic === 'vintage') filters.push('sepia(35%) contrast(90%) brightness(95%)');
         if (liveCinematic === 'noir') filters.push('grayscale(100%) contrast(150%)');
 
-        // LUT preset approximations via CSS canvas filters. These are deliberate
-        // approximations, not real 3D LUTs — the UI labels them accordingly
-        // ("Warm Contrast" etc.) rather than as specific film stocks (B6).
-        if (liveMastering?.lutPreset === 'kodak_5219') filters.push('contrast(110%) saturate(105%) sepia(5%)');
-        if (liveMastering?.lutPreset === 'fuji_400h') filters.push('saturate(85%) contrast(95%) brightness(102%) hue-rotate(-3deg)');
-        if (liveMastering?.lutPreset === 'noir') filters.push('grayscale(100%) contrast(120%)');
-        if (liveMastering?.lutPreset === 'technicolor') filters.push('saturate(180%) contrast(110%)');
+        // Phase 14: preview-only CSS approximations of each .cube preset.
+        // The real 3D LUT is applied server-side during /api/transcode, so
+        // these only need to be visibly distinct from `none` and from each
+        // other — not pixel-accurate matches to the underlying filmstock.
+        if (liveMastering?.lutPreset === 'kodak_vision3_250d')  filters.push('contrast(108%) saturate(108%) sepia(8%)');
+        if (liveMastering?.lutPreset === 'fuji_eterna_250d')    filters.push('saturate(88%) contrast(95%) brightness(102%) hue-rotate(-4deg)');
+        if (liveMastering?.lutPreset === 'kodak_2383')          filters.push('contrast(115%) saturate(115%) sepia(15%)');
+        if (liveMastering?.lutPreset === 'arri_logc_to_rec709') filters.push('contrast(102%) brightness(100%)');
+        if (liveMastering?.lutPreset === 'bleach_bypass')       filters.push('saturate(35%) contrast(130%) brightness(98%)');
 
         ctx.filter = filters.join(' ') || 'none';
     };
@@ -958,15 +960,20 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
     }, [scenes, assets]);
 
     // POST the rendered WebM blob to /api/transcode, receive an MP4 back
-    // (G1 client side). Server handles ffmpeg + LUFS normalization (G2/G3).
-    // On success, swap the displayed download button to point at the MP4 blob.
+    // (G1 client side). Server handles ffmpeg + LUFS normalization (G2/G3)
+    // plus Phase-14 LUT3D color grading. On success, swap the displayed
+    // download button to point at the MP4 blob.
     const handleTranscodeToMp4 = async () => {
         if (!finalUrl || transcodeState === 'transcoding') return;
         setTranscodeState('transcoding');
         setTranscodeError(null);
         try {
             const sourceBlob = await (await fetch(finalUrl)).blob();
-            const resp = await fetch('/api/transcode', {
+            // Phase 14: pass the requested LUT as a query string param. The body
+            // is the raw WebM stream so JSON-in-body isn't an option; query
+            // string round-trips through Express' req.query.
+            const lutPreset = mastering?.lutPreset ?? 'none';
+            const resp = await fetch(`/api/transcode?lutPreset=${encodeURIComponent(lutPreset)}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/octet-stream' },
                 body: sourceBlob,
@@ -975,6 +982,12 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
                 let detail = `HTTP ${resp.status}`;
                 try { const j = await resp.json(); detail = j.message || j.error || detail; } catch {}
                 throw new Error(detail);
+            }
+            const lutApplied = resp.headers.get('X-LUT-Applied') === 'true';
+            if (lutPreset !== 'none' && !lutApplied) {
+                // Server silently downgraded to no-LUT — surface so the user
+                // knows the MP4 has only preview-grade color, not the .cube look.
+                onLogRef.current?.(`LUT "${lutPreset}" could not be applied; MP4 uses preview color only.`, 'error');
             }
             const mp4Blob = await resp.blob();
             const url = URL.createObjectURL(mp4Blob);

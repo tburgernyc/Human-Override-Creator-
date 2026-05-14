@@ -190,5 +190,90 @@ test('throws with raw text on malformed JSON', () => {
   }
 });
 
+// ---------- normalizeLutPreset (Phase 14) ----------
+// Mirrors App.tsx — old `lutPreset` enum values map to new filmstock names
+// at read time so pre-Phase-14 projects keep their selection.
+const LUT_PRESETS = [
+  'none',
+  'kodak_vision3_250d',
+  'fuji_eterna_250d',
+  'kodak_2383',
+  'arri_logc_to_rec709',
+  'bleach_bypass',
+];
+const LEGACY_LUT_MAP = {
+  kodak_5219:  'kodak_vision3_250d',
+  fuji_400h:   'fuji_eterna_250d',
+  noir:        'bleach_bypass',
+  technicolor: 'kodak_2383',
+};
+const normalizeLutPreset = (raw) => {
+  if (typeof raw !== 'string' || raw === 'none') return 'none';
+  if (LUT_PRESETS.includes(raw)) return raw;
+  return LEGACY_LUT_MAP[raw] ?? 'none';
+};
+
+console.log('\nnormalizeLutPreset');
+test('legacy kodak_5219 → kodak_vision3_250d', () => {
+  assert.equal(normalizeLutPreset('kodak_5219'), 'kodak_vision3_250d');
+});
+test('legacy fuji_400h → fuji_eterna_250d', () => {
+  assert.equal(normalizeLutPreset('fuji_400h'), 'fuji_eterna_250d');
+});
+test('legacy noir → bleach_bypass', () => {
+  assert.equal(normalizeLutPreset('noir'), 'bleach_bypass');
+});
+test('legacy technicolor → kodak_2383', () => {
+  assert.equal(normalizeLutPreset('technicolor'), 'kodak_2383');
+});
+test('new enum value passes through', () => {
+  assert.equal(normalizeLutPreset('kodak_2383'), 'kodak_2383');
+});
+test('unknown value falls back to none', () => {
+  assert.equal(normalizeLutPreset('made_up_thing'), 'none');
+});
+test('undefined falls back to none', () => {
+  assert.equal(normalizeLutPreset(undefined), 'none');
+});
+
+// ---------- buildLutArg (Phase 14) ----------
+// Mirrors server/proxy.ts. The arg builder downgrades silently when a
+// preset is missing, invalid, or the .cube file doesn't exist on disk.
+// We exercise the validation+formatting half here; the fs.existsSync half
+// is covered by the manual smoke test (renaming a real .cube file).
+import { existsSync } from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SMOKE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_LUTS_DIR = path.resolve(SMOKE_DIR, '..', 'public', 'luts');
+
+const buildLutArg = (preset, lutsDir) => {
+  if (!preset || preset === 'none') return null;
+  if (!LUT_PRESETS.includes(preset)) return null;
+  const filePath = path.join(lutsDir, `${preset}.cube`);
+  if (!existsSync(filePath)) return null;
+  return { arg: `lut3d='${filePath}'`, preset };
+};
+
+console.log('\nbuildLutArg');
+test('returns null for "none"', () => {
+  assert.equal(buildLutArg('none', REPO_LUTS_DIR), null);
+});
+test('returns null for unknown preset', () => {
+  assert.equal(buildLutArg('not_a_real_lut', REPO_LUTS_DIR), null);
+});
+test('returns null when .cube file is missing', () => {
+  // valid enum value, but pointing at a directory with no .cube files
+  assert.equal(buildLutArg('kodak_2383', '/tmp/nonexistent-luts-dir-for-smoke'), null);
+});
+test('returns lut3d arg with single-quoted path when .cube file exists', () => {
+  // Requires the placeholder .cube to be present at public/luts/kodak_2383.cube
+  const got = buildLutArg('kodak_2383', REPO_LUTS_DIR);
+  assert.ok(got, 'expected a non-null arg when the .cube file exists');
+  assert.match(got.arg, /^lut3d='.+kodak_2383\.cube'$/);
+  assert.equal(got.preset, 'kodak_2383');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
