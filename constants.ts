@@ -1,5 +1,5 @@
 export const MODEL_NAMES = {
-  THINKING: 'gemini-3-pro-preview',
+  THINKING: 'gemini-2.5-pro',
   IMAGE: 'gemini-3-pro-image-preview',
   VIDEO: 'veo-3.1-generate-preview',
   VIDEO_FAST: 'veo-3.1-fast-generate-preview',
