@@ -88,23 +88,31 @@ You should see two coloured log streams labeled `proxy` and `vite`. If `proxy` c
 
 Verifies that pre-Phase-14 projects with old `lutPreset` values load without error and remap to the new filmstock names.
 
-1. In DevTools → **Application** tab → **Local Storage** → `http://localhost:3000` → find the key `human_override_active_project_v7`. (If absent, click "New Project" in the app once to create one, then look again.)
-2. Click the value to edit it. Find the `mastering` object and change `"lutPreset"` to `"kodak_5219"` (a legacy value that no longer exists in the new enum). Save (Enter or click outside).
-3. Hard-refresh the page (Ctrl+Shift+R).
-4. Click **"Open VFX Synthesis Lab"** (the gold button with the wand-sparkles icon).
-5. **Expected:** The LUT dropdown/selector shows **"Kodak Vision3 250D"** as the currently-selected preset. **No** red errors in the Console.
+> **Prereq.** The "Open VFX Synthesis Lab" button lives inside the `phase-post` section, which is gated on `project.scenes.length > 0` (App.tsx). A brand-new "New Project" has zero scenes, so Stage 4 won't render and the button won't exist in the DOM. The snippet below seeds a minimal dummy scene alongside the legacy `lutPreset` in one paste — no need to run the real Generate flow.
 
-Repeat with each legacy value to confirm all four map paths work:
+1. In DevTools → **Console**, paste this one-liner. Substitute the highlighted value for each row in the table below.
 
-| Set `lutPreset` to | After refresh, VFXMaster should show |
+   ```js
+   (()=>{const k='human_override_active_project_v7';const p=JSON.parse(localStorage.getItem(k));p.mastering.lutPreset='kodak_5219';if(!p.scenes||p.scenes.length===0)p.scenes=[{id:'smoke',description:'smoke',visualPrompt:'',charactersInScene:[],narratorLines:[],estimatedDuration:1,musicMood:'calm'}];localStorage.setItem(k,JSON.stringify(p));location.reload();})()
+   ```
+
+   If `localStorage.getItem(k)` returns `null` on the first run (no project yet), click **"New Project"** in the app once, then re-run the snippet.
+
+2. After the reload, scroll to the **Post-Production & Release** section (or click the **04 Post** tab in the phase nav). Click **"Open VFX Synthesis Lab"** — the wand-sparkles button on the right side of that section's header. It's a *gold-outlined* button by default (`text-luna-gold border border-luna-gold/20`); the fill only goes solid gold on hover.
+
+3. **Expected:** in the modal that opens, one LUT preset button in the grid is highlighted with a solid gold fill (`bg-luna-gold text-white`) matching the table below. **No** red errors in the Console.
+
+| Set `lutPreset` to | Highlighted LUT button in VFXMaster |
 |---|---|
-| `kodak_5219` | Kodak Vision3 250D |
-| `fuji_400h` | Fuji Eterna 250D |
-| `noir` | Bleach Bypass |
-| `technicolor` | Kodak 2383 Print |
+| `kodak_5219`    | Kodak Vision3 250D |
+| `fuji_400h`     | Fuji Eterna 250D |
+| `noir`          | Bleach Bypass |
+| `technicolor`   | Kodak 2383 Print |
 | `garbage_value` | Bypass (None) |
 
-Set `lutPreset` back to `"none"` when done.
+When done, run the snippet one more time with `'none'` to restore the documented post-smoke state.
+
+> **Automated cross-check.** The pure mapping function lives at `services/lutMigration.ts` and has 11 load-bearing assertions in `scripts/lut-migration.test.mts`. Run `npx tsx scripts/lut-migration.test.mts` to verify the mapping table without a browser.
 
 ---
 

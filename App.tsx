@@ -28,7 +28,7 @@ import { ScriptDoctor } from './components/ScriptDoctor';
 import { VFXMaster } from './components/VFXMaster';
 import { Moodboard } from './components/Moodboard';
 import { ProductionStageOverview } from './components/ProductionStageOverview';
-import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft, LutPreset, LUT_PRESETS } from './types';
+import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft } from './types';
 import {
   analyzeScript,
   generateCharacterImage,
@@ -45,6 +45,7 @@ import {
 } from './services/gemini';
 import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
 import { saveAssets as saveAssetsToIDB, loadAssets as loadAssetsFromIDB, clearAssets as clearAssetsFromIDB, saveLog as saveLogToIDB, loadLog as loadLogFromIDB } from './services/assetStore';
+import { normalizeLutPreset } from './services/lutMigration';
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v7';
 const ALL_PROJECTS_KEY = 'human_override_archives_v5';
@@ -90,20 +91,6 @@ const makeDefaultProject = (): ProjectState => ({
     bloomIntensity: 10, vignetteIntensity: 30, lightLeakIntensity: 20, filmBurnIntensity: 10, lutPreset: 'none'
   }
 });
-
-// Phase 14: old `lutPreset` values map to the new filmstock-named enum at read
-// time. Don't write back — let the next save persist the normalized value.
-const LEGACY_LUT_MAP: Record<string, LutPreset> = {
-  kodak_5219:  'kodak_vision3_250d',
-  fuji_400h:   'fuji_eterna_250d',
-  noir:        'bleach_bypass',
-  technicolor: 'kodak_2383',
-};
-const normalizeLutPreset = (raw: unknown): LutPreset => {
-  if (typeof raw !== 'string' || raw === 'none') return 'none';
-  if ((LUT_PRESETS as readonly string[]).includes(raw)) return raw as LutPreset;
-  return LEGACY_LUT_MAP[raw] ?? 'none';
-};
 
 // Brings archived projects forward through schema changes (new fields, renamed
 // keys, missing arrays). Without this, loading a pre-Phase-1 archive surfaces

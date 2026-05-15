@@ -40,7 +40,7 @@ const stripDataUriPrefix = (s: string): string => {
 };
 
 // Routes all SDK calls through the secure API proxy, keeping the API key server-side.
-// In production (Vercel), uses the current page's origin so no env var is needed.
+// In production (Railway), uses the current page's origin so no env var is needed.
 // Locally, falls back to VITE_PROXY_URL or the Express dev proxy on port 3001.
 const PROXY_BASE_URL: string = import.meta.env?.VITE_PROXY_URL ??
   (typeof window !== 'undefined'
