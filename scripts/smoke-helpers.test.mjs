@@ -275,5 +275,221 @@ test('returns lut3d arg with single-quoted path when .cube file exists', () => {
   assert.equal(got.preset, 'kodak_2383');
 });
 
+// ---------- verify-mp4 parsers (Phase 14 sign-off) ----------
+// Cover the pure parsing helpers in verify-mp4.mjs against representative
+// fixture strings so regressions in the verify pipeline get caught before
+// they confuse a sign-off run.
+import {
+  parseCodecsFromFfmpegStderr,
+  parseImageDimensions,
+  parseLoudnormSummary,
+  srtTimestampToMs,
+  parseSrtCues,
+  validateSrtCues,
+  validateMetadataText,
+} from './verify-mp4.mjs';
+
+// Trimmed sample of `ffmpeg -i master.mp4` stderr output. Two streams:
+// h264 video, aac audio. The wrapping `Input #0` block is verbatim.
+const FFMPEG_MP4_STDERR = `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'master.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf60.16.100
+  Duration: 00:00:15.04, start: 0.000000, bitrate: 6125 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709), 1920x1080 [SAR 1:1 DAR 16:9], 5996 kb/s, 30 fps, 30 tbr, 15360 tbn (default)
+      Metadata:
+        handler_name    : VideoHandler
+        vendor_id       : [0][0][0][0]
+  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 128 kb/s (default)
+      Metadata:
+        handler_name    : SoundHandler`;
+
+console.log('\nparseCodecsFromFfmpegStderr');
+test('extracts h264 video + aac audio', () => {
+  const got = parseCodecsFromFfmpegStderr(FFMPEG_MP4_STDERR);
+  assert.equal(got.video, 'h264');
+  assert.equal(got.audio, 'aac');
+});
+test('returns undefined fields when streams are missing', () => {
+  const got = parseCodecsFromFfmpegStderr('nothing here');
+  assert.equal(got.video, undefined);
+  assert.equal(got.audio, undefined);
+});
+test('handles video-only file (no audio stream)', () => {
+  const videoOnly = FFMPEG_MP4_STDERR.split('Stream #0:1')[0];
+  const got = parseCodecsFromFfmpegStderr(videoOnly);
+  assert.equal(got.video, 'h264');
+  assert.equal(got.audio, undefined);
+});
+
+console.log('\nparseImageDimensions');
+test('extracts 1920x1080 PNG', () => {
+  const stderr = `Input #0, png_pipe, from 'thumb.png':
+  Stream #0:0: Video: png, rgba(pc, gbr/unknown/unknown), 1920x1080 [SAR 1:1 DAR 16:9], 25 tbr, 25 tbn`;
+  const got = parseImageDimensions(stderr);
+  assert.deepEqual(got, { codec: 'png', width: 1920, height: 1080 });
+});
+test('extracts 1920x1080 MJPEG', () => {
+  const stderr = `Input #0, image2, from 'thumb.jpg':
+  Stream #0:0: Video: mjpeg (Baseline), yuvj420p(pc, bt470bg/unknown/unknown), 1920x1080 [SAR 1:1 DAR 16:9], 25 tbr`;
+  const got = parseImageDimensions(stderr);
+  assert.deepEqual(got, { codec: 'mjpeg', width: 1920, height: 1080 });
+});
+test('returns undefined when no video stream present', () => {
+  assert.equal(parseImageDimensions('not an image'), undefined);
+});
+
+console.log('\nparseLoudnormSummary');
+test('extracts integrated LUFS + true peak dBTP', () => {
+  const stderr = `[Parsed_loudnorm_0 @ 0x7f8e34004000]
+Input Integrated:   -14.08 LUFS
+Input True Peak:     -1.45 dBTP
+Input LRA:            5.20 LU
+Input Threshold:    -24.51 LUFS
+
+Output Integrated:  -14.00 LUFS
+Output True Peak:    -1.40 dBTP`;
+  const got = parseLoudnormSummary(stderr);
+  assert.equal(got.integratedLufs, -14.08);
+  assert.equal(got.truePeakDbtp, -1.45);
+});
+test('handles integer-valued measurements', () => {
+  const stderr = `Input Integrated:   -14 LUFS
+Input True Peak:     -2 dBTP`;
+  const got = parseLoudnormSummary(stderr);
+  assert.equal(got.integratedLufs, -14);
+  assert.equal(got.truePeakDbtp, -2);
+});
+test('returns undefined fields when loudnorm did not run', () => {
+  const got = parseLoudnormSummary('some unrelated error output');
+  assert.equal(got.integratedLufs, undefined);
+  assert.equal(got.truePeakDbtp, undefined);
+});
+
+console.log('\nsrtTimestampToMs');
+test('00:00:00,000 → 0', () => {
+  assert.equal(srtTimestampToMs('00:00:00,000'), 0);
+});
+test('00:00:02,500 → 2500', () => {
+  assert.equal(srtTimestampToMs('00:00:02,500'), 2500);
+});
+test('01:23:45,678 → 5025678', () => {
+  assert.equal(srtTimestampToMs('01:23:45,678'), 5025678);
+});
+test('malformed timestamp returns NaN', () => {
+  assert.ok(Number.isNaN(srtTimestampToMs('not a timestamp')));
+});
+
+console.log('\nparseSrtCues + validateSrtCues');
+const VALID_SRT = `1
+00:00:00,000 --> 00:00:02,500
+NARRATOR: First line spoken.
+
+2
+00:00:02,500 --> 00:00:05,000
+NARRATOR: Second line.
+
+3
+00:00:05,000 --> 00:00:07,500
+DETECTIVE: Question for the witness.
+`;
+
+test('parses three monotonic cues from a valid SRT', () => {
+  const cues = parseSrtCues(VALID_SRT);
+  assert.equal(cues.length, 3);
+  assert.equal(cues[0].startMs, 0);
+  assert.equal(cues[0].endMs, 2500);
+  assert.equal(cues[2].text, 'DETECTIVE: Question for the witness.');
+});
+test('validateSrtCues accepts a clean track', () => {
+  const result = validateSrtCues(parseSrtCues(VALID_SRT));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.reasons, []);
+});
+test('validateSrtCues catches end ≤ start', () => {
+  const broken = `1
+00:00:05,000 --> 00:00:05,000
+zero-duration cue
+`;
+  const result = validateSrtCues(parseSrtCues(broken));
+  assert.equal(result.ok, false);
+  assert.match(result.reasons.join(' '), /end .* start/);
+});
+test('validateSrtCues catches non-monotonic starts', () => {
+  const regress = `1
+00:00:05,000 --> 00:00:07,000
+later cue
+
+2
+00:00:02,000 --> 00:00:04,000
+earlier cue out of order
+`;
+  const result = validateSrtCues(parseSrtCues(regress));
+  assert.equal(result.ok, false);
+  assert.match(result.reasons.join(' '), /regresses/);
+});
+test('validateSrtCues catches empty file', () => {
+  const result = validateSrtCues(parseSrtCues(''));
+  assert.equal(result.ok, false);
+  assert.match(result.reasons.join(' '), /no cues/);
+});
+test('parseSrtCues tolerates CRLF line endings', () => {
+  const crlf = VALID_SRT.replace(/\n/g, '\r\n');
+  const cues = parseSrtCues(crlf);
+  assert.equal(cues.length, 3);
+});
+
+console.log('\nvalidateMetadataText');
+// Mirrors the exact format from components/Renderer.tsx handleDownloadMetadata.
+const VALID_METADATA = `# YouTube Upload Metadata — 2026-05-15
+
+TITLE (primary): The Last Detective
+
+ALTERNATE TITLES:
+- A Detective's Final Case
+- Rain in the Precinct
+
+AUDIENCE: True-crime and noir fans
+
+HOOK SCORE: 8/10
+
+--- DESCRIPTION ---
+
+[Paste your description here. The current schema doesn't generate one yet.]
+
+--- TAGS ---
+
+[Paste comma-separated tags here.]
+`;
+
+test('accepts well-formed metadata.txt', () => {
+  const result = validateMetadataText(VALID_METADATA);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.reasons, []);
+});
+test('rejects file under 100 bytes', () => {
+  const result = validateMetadataText('# YouTube Upload Metadata — 2026-05-15');
+  assert.equal(result.ok, false);
+  assert.match(result.reasons.join(' '), /bytes/);
+});
+test('rejects file missing the header line', () => {
+  const noHeader = VALID_METADATA.replace('# YouTube Upload Metadata —', '# Some Other Doc');
+  const result = validateMetadataText(noHeader);
+  assert.equal(result.ok, false);
+  assert.match(result.reasons.join(' '), /YouTube Upload Metadata/);
+});
+test('rejects file missing the TITLE line', () => {
+  const noTitle = VALID_METADATA.replace('TITLE (primary):', 'NAME (primary):');
+  const result = validateMetadataText(noTitle);
+  assert.equal(result.ok, false);
+  assert.match(result.reasons.join(' '), /TITLE/);
+});
+test('rejects empty input', () => {
+  const result = validateMetadataText('');
+  assert.equal(result.ok, false);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

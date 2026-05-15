@@ -184,3 +184,100 @@ Verifies that `generateSceneImage` injects the turnaround sheet and instructs th
 - [ ] `public/luts/` has all 5 `.cube` files (no `.bak` leftovers).
 - [ ] localStorage `lutPreset` is back to `none` (or whatever value you intend to keep).
 - [ ] Any test characters / scenes created solely for smoke can be deleted from the project to keep production data clean.
+
+---
+
+## 6. YouTube-Ready Sign-off
+
+The nine-item checklist at `docs/superpowers/specs/2026-05-14-youtube-quality-plan.md` §6 must be walked end-to-end on a real export before declaring the app produces YouTube-grade output. Items 2-7 are mechanical and automated by `scripts/verify-mp4.mjs`; items 1, 8, and 9 require human eyeballs.
+
+### 6.0 Build the test corpus
+
+1. Start the app: `npm run dev:all`.
+2. Create a new project. Paste the placeholder script from `constants.ts` (`INITIAL_SCRIPT_PLACEHOLDER`) into Script Input — it produces ~5 scenes which is enough volume to stress item 8.
+3. Run the full generation flow: scene breakdown → cast → scene images → Veo videos → audio.
+4. Open **VFX Synthesis Lab** and pick any non-`none` LUT (Kodak 2383 is a safe default).
+5. Click **Initialize Master Export** and let the renderer produce the WebM.
+6. Once the WebM is ready, download all four artifacts in turn:
+   - **Download Master Unit (MP4)** → `master_production_unit.mp4`
+   - **Captions (.srt)** → `master_production_unit.srt`
+   - **Thumbnail** → `master_production_unit_thumbnail.png`
+   - **Metadata** → `master_production_unit_metadata.txt`
+
+If any download button is disabled, the underlying export is missing — generate the missing piece (e.g., re-run TTS for narrator lines) before continuing.
+
+### 6.1 Run the automated checks (items 2-7)
+
+From the repo root, with the four artifacts in one directory:
+
+```bash
+node scripts/verify-mp4.mjs \
+  --mp4       ~/Downloads/master_production_unit.mp4 \
+  --srt       ~/Downloads/master_production_unit.srt \
+  --thumbnail ~/Downloads/master_production_unit_thumbnail.png \
+  --metadata  ~/Downloads/master_production_unit_metadata.txt
+```
+
+Expected: every line tagged `[PASS]` and exit code `0`. If anything is `[FAIL]`, the measured value is printed inline — treat that as a regression, file the fix, and re-run before continuing.
+
+The script covers:
+
+| # | Check | Mechanism |
+|---|---|---|
+| 2 | H.264 video + AAC audio codecs | ffmpeg stream-info probe |
+| 3 | Integrated loudness within ±0.5 LU of -14 LUFS | ffmpeg `loudnorm=print_format=summary` |
+| 4 | True peak ≤ -1.0 dBTP | same loudnorm pass |
+| 5 | SRT cues parseable, monotonic, end > start | pure parser |
+| 6 | Thumbnail is 1920×1080 PNG/JPEG | ffmpeg stream-info probe |
+| 7 | Metadata `.txt` has header + TITLE block | pure parser |
+
+(Item 5's *timing-against-video* — does the caption land on the spoken word? — remains a manual eyeball check during item 1 playback.)
+
+### 6.2 Manual playback check (item 1)
+
+Open `master_production_unit.mp4` in **all three**:
+
+- QuickTime (or platform native: Windows Media Player / Files)
+- VLC
+- A browser `<video>` element — drop the file into a blank `<video controls>` test page or use `chrome://media-internals` to confirm decode without errors
+
+Expected: each plays back end-to-end with audible voice + music + ambient. No "unsupported codec" prompts, no green frames, no audio dropouts.
+
+While playing, spot-check that the SRT timing lines up: open the `.srt` in QuickTime (drag onto the video window) — when a caption is on screen, the spoken word should be audible within ~250 ms.
+
+### 6.3 Render-stability check (item 8)
+
+If the test corpus produced a project under 3 minutes total, extend it: add scenes until the project's combined `estimatedDuration` is ≥ 180 seconds (the renderer shows total length in the render dialog).
+
+Click **Initialize Master Export** with the long project. Watch the browser tab — DevTools should stay responsive, no "Aw, Snap" crash page, no `MediaRecorder` errors in console. The final `.webm` should be unbroken (re-run §6.1 against it if you want to be thorough).
+
+If the tab crashes, **stop the sign-off** — this is G10 territory (Phase 15 server-side render). File it and pick that work up next.
+
+### 6.4 Upload preview (item 9)
+
+Upload `master_production_unit.mp4` + `master_production_unit.srt` to a **private** YouTube test channel. Use YouTube Studio's preview player:
+
+- Voice, music, and ambient are all audible and the mix is balanced (no track dominating)
+- Captions appear when toggled on in the player, timing reads natural
+- The thumbnail uploads cleanly when supplied (item 6 sanity)
+- The metadata `.txt` produces usable copy when pasted into Title + Description + Tags fields
+
+### 6.5 Sign-off table
+
+Copy this block into your commit message or the roadmap file when complete:
+
+```
+YouTube-Ready Sign-off — <DATE> — <YOUR-INITIALS>
+Project: <project-name> (<N> scenes, <minutes>m)
+LUT applied: <kodak_2383 / none / ...>
+
+[ ] Item 1 — Plays in QuickTime / VLC / <video>
+[ ] Item 2-7 — verify-mp4.mjs reports all PASS (paste output here)
+[ ] Item 8 — 3-min+ render completes without tab crash
+[ ] Item 9 — YouTube Studio preview: A/V balance + captions OK
+
+Notes:
+  <observed loudness, any oddities, things to revisit>
+```
+
+Once all four boxes are checked, edit `docs/superpowers/specs/2026-05-14-youtube-quality-plan.md` lines 186-194 — replace each `- [ ]` with `- [x] <date>` so the project state reflects that Phase 14 has been formally verified.
