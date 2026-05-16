@@ -10,6 +10,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import ffmpegStatic from 'ffmpeg-static';
+import { PayloadTooLargeError, makeSizeGuard } from './sizeGuard.js';
+import { handleRender } from './render.js';
+import { fetchVeo, isAllowedDownloadUri, VeoDownloadError } from './veoDownload.js';
 
 // Resolve `server/` directory once at module load; used for both the prod
 // static-bundle path and the Phase-14 LUTs directory lookup.
@@ -205,20 +208,11 @@ app.all('/api/gemini/*tail', geminiLimiter, async (req, res) => {
     }
 });
 
-// Strict allowlist: only Veo file URIs are downloadable. Without this the endpoint
-// would forward any request under generativelanguage.googleapis.com using our API key.
-function isAllowedDownloadUri(uri: string): boolean {
-    let parsed: URL;
-    try { parsed = new URL(uri); } catch { return false; }
-    if (parsed.protocol !== 'https:') return false;
-    if (parsed.host !== 'generativelanguage.googleapis.com') return false;
-    // Veo's generated video URIs are emitted as `/v1beta/files/<file-id>:download`.
-    return parsed.pathname.startsWith('/v1beta/files/');
-}
-
-// Secure video/file download endpoint — injects API key server-side so the client never holds it.
-// On Railway, request timeouts are generous enough that large Veo downloads complete
-// without the per-request limits that constrain serverless deployments.
+// Secure video/file download endpoint — injects API key server-side so the
+// client never holds it. URI validation + authenticated fetch live in
+// `veoDownload.ts` so `/api/render` can reuse them.
+// On Railway, request timeouts are generous enough that large Veo downloads
+// complete without the per-request limits that constrain serverless deployments.
 app.get('/api/download', geminiLimiter, async (req, res) => {
     if (blockIfUnconfigured(res)) return;
     const uri = req.query.uri as string;
@@ -226,15 +220,7 @@ app.get('/api/download', geminiLimiter, async (req, res) => {
         return res.status(400).json({ error: 'Invalid or missing URI' });
     }
     try {
-        const url = new URL(uri);
-        url.searchParams.set('key', GEMINI_API_KEY!);
-        const response = await fetch(url.toString());
-
-        if (!response.ok) {
-            const errText = await response.text();
-            console.warn(`Download upstream error ${response.status}: ${errText.slice(0, 200)}`);
-            return res.status(response.status).json({ error: 'Upstream fetch failed', status: response.status, details: errText.slice(0, 500) });
-        }
+        const response = await fetchVeo(uri, GEMINI_API_KEY!);
 
         res.status(response.status);
         const contentType = response.headers.get('Content-Type');
@@ -256,6 +242,10 @@ app.get('/api/download', geminiLimiter, async (req, res) => {
             res.send(Buffer.from(buffer));
         }
     } catch (error: any) {
+        if (error instanceof VeoDownloadError && error.status) {
+            console.warn(`Download upstream error ${error.status}: ${error.message}`);
+            return res.status(error.status).json({ error: 'Upstream fetch failed', status: error.status, details: error.message });
+        }
         console.error('Download proxy error:', error.message);
         res.status(500).json({ error: 'Download proxy failed', details: error.message });
     }
@@ -281,6 +271,14 @@ const transcodeLimiter = rateLimit({
     legacyHeaders: false,
     message: { error: 'Transcode rate limit exceeded', message: 'Too many transcode requests; try again in a minute.' },
 });
+
+// D5 (audit slice) — hard upper cap on raw request bodies that hit
+// `/api/transcode`. A streaming WebM upload could otherwise run forever and
+// fill the tmp disk. 500 MB covers any realistic in-app export (~10 min of
+// 1080p WebM at our bitrate) while still cutting off pathological clients.
+// The Transform + sentinel error live in `sizeGuard.ts` so vitest can cover
+// them without spinning up Express.
+const MAX_TRANSCODE_BODY_BYTES = 500 * 1024 * 1024;
 
 // Run an ffmpeg invocation. Resolves with collected stderr (where loudnorm
 // prints its JSON measurements) on exit code 0; rejects with the stderr tail
@@ -332,11 +330,28 @@ const parseLoudnormJson = (stderr: string): Record<string, string> | null => {
     try { return JSON.parse(stderr.slice(start, end + 1)); } catch { return null; }
 };
 
+// G10 (audit slice) — server-side compose pipeline. Currently returns 501
+// with a validated manifest echo so the client can post against the stable
+// contract while subsequent slices build out the ffmpeg pipeline. Shares
+// the transcode limiter because the eventual workload is comparably CPU-
+// heavy; tighten further if scale demands.
+app.post('/api/render', transcodeLimiter, handleRender);
+
 app.post('/api/transcode', transcodeLimiter, async (req, res) => {
     if (!ffmpegStatic) {
         res.status(503).json({ error: 'Transcoder unavailable', message: 'ffmpeg binary missing from this build.' });
         return;
     }
+
+    // D5: disable Node's per-request socket timeouts for the duration of this
+    // handler. Two-pass ffmpeg on a long export can easily exceed Node's
+    // defaults (which vary by version but historically default to ~2 min on
+    // the response side). Railway / Render / Fly have their own infra-level
+    // limits that still bound runaway requests — this just stops the Node
+    // layer from killing us mid-encode.
+    req.setTimeout(0);
+    res.setTimeout(0);
+
     let tmpDir: string | null = null;
     try {
         tmpDir = await mkdtemp(path.join(tmpdir(), 'transcode-'));
@@ -346,7 +361,9 @@ app.post('/api/transcode', transcodeLimiter, async (req, res) => {
         // Pull the raw request body into a temp file. The client posts
         // application/octet-stream so the express.json middleware passes it
         // through untouched and req is a usable Readable stream.
-        await pipeline(req, fs.createWriteStream(inputPath));
+        // D5: route through a size-cap Transform so absurd uploads abort
+        // mid-stream rather than filling /tmp.
+        await pipeline(req, makeSizeGuard(MAX_TRANSCODE_BODY_BYTES), fs.createWriteStream(inputPath));
 
         // Phase 14: resolve the requested LUT (query string, not body — the
         // body is the raw WebM stream). Missing file or unknown preset is a
@@ -405,9 +422,23 @@ app.post('/api/transcode', transcodeLimiter, async (req, res) => {
         res.setHeader('Content-Disposition', 'attachment; filename="master.mp4"');
         await pipeline(fs.createReadStream(outputPath), res);
     } catch (error: any) {
-        console.error('Transcode failed:', error.message);
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'Transcode failed', message: error.message?.slice(0, 500) || 'unknown error' });
+        // D5: distinguish the size-cap abort (413) from generic transcode
+        // failures (500) so a client uploading a 1 GB blob gets a clear
+        // signal rather than a vague "transcode failed".
+        if (error instanceof PayloadTooLargeError) {
+            console.warn(`Transcode upload aborted: payload exceeded ${error.limitBytes} bytes`);
+            if (!res.headersSent) {
+                res.status(413).json({
+                    error: 'Payload too large',
+                    message: `Upload exceeded the ${Math.round(error.limitBytes / (1024 * 1024))} MB transcode cap.`,
+                    limitBytes: error.limitBytes,
+                });
+            }
+        } else {
+            console.error('Transcode failed:', error.message);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Transcode failed', message: error.message?.slice(0, 500) || 'unknown error' });
+            }
         }
     } finally {
         if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});

@@ -8,10 +8,12 @@ import { Renderer } from './components/Renderer';
 import { CharacterModal } from './components/CharacterModal';
 import { AddCharacterModal } from './components/AddCharacterModal';
 import { Toasts, type ToastItem } from './components/Toasts';
+import { ServerRenderButton } from './components/ServerRenderButton';
+import { useModalStack } from './hooks/useModalStack';
 import { LandingPage } from './components/LandingPage';
 import { ProjectsView } from './components/ProjectsView';
 import { SceneInspector } from './components/SceneInspector';
-import { ProductionManifest } from './components/ProductionManifest';
+import { AssetWorkspaceModal, AssetWorkspaceTab } from './components/AssetWorkspaceModal';
 import { BatchManifestConfirmModal } from './components/BatchManifestConfirmModal';
 import { DeleteSceneConfirmModal } from './components/DeleteSceneConfirmModal';
 import { estimateBatchCost, type BatchCostEstimate } from './services/costEstimator';
@@ -19,14 +21,12 @@ import { ProductionTimeline } from './components/ProductionTimeline';
 import { CastEnsemble } from './components/CastEnsemble';
 import { DirectorAssistant } from './components/DirectorAssistant';
 import { YouTubeOptimizer } from './components/YouTubeOptimizer';
-import { AssetLibrary } from './components/AssetLibrary';
 import { ProductionMonitor } from './components/ProductionMonitor';
 import { AudioMixer } from './components/AudioMixer';
 import { ContinuityAuditor } from './components/ContinuityAuditor';
 import { DirectorialDeck } from './components/DirectorialDeck';
 import { BRollSuggestionModal } from './components/BRollSuggestionModal';
 import { DirectorDraftModal } from './components/DirectorDraftModal';
-import { StoryboardView } from './components/StoryboardView';
 import { ScriptDoctor } from './components/ScriptDoctor';
 import { VFXMaster } from './components/VFXMaster';
 import { Moodboard } from './components/Moodboard';
@@ -167,22 +167,22 @@ const App: React.FC = () => {
 
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.LANDSCAPE);
   const [resolution, setResolution] = useState<Resolution>(Resolution.FHD);
-  const [showPlayer, setShowPlayer] = useState(false);
-  const [showRenderer, setShowRenderer] = useState(false);
-  const [showMastering, setShowMastering] = useState(false);
-  const [showManifest, setShowManifest] = useState(false);
+  // B4 (audit slice): boolean-only modal flags collapsed into a single
+  // stack. Each entry tracks open/closed AND order, so z-index follows the
+  // stack depth and Escape can close top-first when we want LIFO behaviour.
+  // See hooks/useModalStack.ts for the reducer.
+  const modals = useModalStack();
+  // B3 (audit slice): unified Asset/Storyboard/Manifest workspace. `null`
+  // means closed; setting a tab opens the workspace with that view active.
+  // Replaces the legacy showStoryboard / showAssetLibrary / showManifest
+  // booleans.
+  const [assetWorkspaceTab, setAssetWorkspaceTab] = useState<AssetWorkspaceTab | null>(null);
   const [batchConfirm, setBatchConfirm] = useState<{ estimate: BatchCostEstimate; runtimeMin: number } | null>(null);
   const [pendingDeleteSceneId, setPendingDeleteSceneId] = useState<string | null>(null);
-  const [showAssetLibrary, setShowAssetLibrary] = useState(false);
-  const [showMixer, setShowMixer] = useState(false);
-  const [showAuditor, setShowAuditor] = useState(false);
-  const [showDeck, setShowDeck] = useState(false);
-  const [showBRoll, setShowBRoll] = useState(false);
-  const [showStoryboard, setShowStoryboard] = useState(false);
-  const [showScriptDoctor, setShowScriptDoctor] = useState(false);
+  // Payload-carrying modals — kept separate from the stack because each holds
+  // data the stack can't usefully model (selected scene, edited character).
   const [inspectingScene, setInspectingScene] = useState<Scene | null>(null);
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
-  const [showAddCharacter, setShowAddCharacter] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [bRollSuggestions, setBRollSuggestions] = useState<Scene[]>([]);
@@ -353,11 +353,23 @@ const App: React.FC = () => {
   }, [archives]);
 
   useEffect(() => {
-    if (project.status === 'ready' && !autoDiagnosisTriggered) {
+    // Auto-diagnosis (open assistant chat) fires once when analysis lands. After
+    // the B8 status split, that moment is `'analyzed'` — `'ready'` no longer
+    // means "just finished analyzing" and would never fire on first run.
+    if (project.status === 'analyzed' && !autoDiagnosisTriggered) {
       setChatOpen(true);
       setAutoDiagnosisTriggered(true);
     }
   }, [project.status, autoDiagnosisTriggered]);
+
+  // B8: promote 'analyzed' → 'ready' once every scene has a complete asset bundle.
+  // Demotion is intentionally one-way: deleting a scene mid-flight shouldn't
+  // surprise the user by reverting the badge.
+  useEffect(() => {
+    if (isAllComplete && project.status === 'analyzed') {
+      setProject(prev => ({ ...prev, status: 'ready' }));
+    }
+  }, [isAllComplete, project.status]);
 
   // Keyboard shortcuts (UX2): Esc closes any open modal, Cmd/Ctrl+K toggles
   // the assistant chat, ←/→ navigates between scenes when no text field is
@@ -368,20 +380,15 @@ const App: React.FC = () => {
       const isInput = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
       if (e.key === 'Escape') {
-        // Batch-close every modal-ish state. They're rendered as separate
-        // overlays so they don't strictly nest; firing all closes is safe.
-        setShowPlayer(false);
-        setShowRenderer(false);
-        setShowMastering(false);
-        setShowManifest(false);
-        setShowAssetLibrary(false);
-        setShowMixer(false);
-        setShowAuditor(false);
-        setShowDeck(false);
-        setShowBRoll(false);
-        setShowStoryboard(false);
-        setShowScriptDoctor(false);
-        setShowAddCharacter(false);
+        // B4: prefer LIFO close — pop the topmost stack modal first so a
+        // user inside a nested view backs out one layer at a time. If
+        // nothing's on the stack, fall through to clearing payload modals
+        // and the asset workspace (none of which participate in the stack).
+        if (modals.hasAny()) {
+          modals.closeTop();
+          return;
+        }
+        setAssetWorkspaceTab(null);
         setInspectingScene(null);
         setEditingCharacter(null);
         return;
@@ -499,7 +506,7 @@ const App: React.FC = () => {
     } else if (name === 'suggest_b_roll') {
       const suggestions = await suggestBRoll(project);
       setBRollSuggestions(suggestions.map(s => ({ ...s, id: crypto.randomUUID() })));
-      setShowBRoll(true);
+      modals.open('broll');
       return "B-Roll synthesis complete. Review suggestions in the terminal.";
     }
     return "Unknown tool.";
@@ -541,7 +548,7 @@ const App: React.FC = () => {
       );
 
       const missingCount = charsWithRefs.filter(c => !c.referenceImageBase64).length;
-      setProject(prev => ({ ...prev, status: 'ready', characters: charsWithRefs, currentStepMessage: '' }));
+      setProject(prev => ({ ...prev, status: 'analyzed', characters: charsWithRefs, currentStepMessage: '' }));
 
       if (missingCount > 0) {
         addLog(`Cast synthesis: ${characters.length - missingCount}/${characters.length} references locked. Missing refs will retry on first scene use.`, 'success');
@@ -885,7 +892,7 @@ const App: React.FC = () => {
       scenes: [...p.scenes, ...newScenes],
       assets: initializedAssets
     }));
-    setShowBRoll(false);
+    modals.close('broll');
     addLog(`${newScenes.length} B-Roll scenes injected.`, "success");
   };
 
@@ -1045,7 +1052,7 @@ const App: React.FC = () => {
       step: 3,
       title: 'Export your final video',
       desc: 'All scenes complete. Compile the master production unit.',
-      action: { label: 'Initialize Master Export', onClick: () => setShowRenderer(true) },
+      action: { label: 'Initialize Master Export', onClick: () => modals.open('renderer') },
     };
   })();
 
@@ -1053,7 +1060,7 @@ const App: React.FC = () => {
     <Layout
       activeView={view}
       onViewChange={setView}
-      isProcessing={isBatchProcessing || (project.status !== 'ready' && project.status !== 'idle')}
+      isProcessing={isBatchProcessing || (project.status !== 'ready' && project.status !== 'analyzed' && project.status !== 'idle')}
       assistantActive={chatOpen}
       onToggleAssistant={() => setChatOpen(!chatOpen)}
     >
@@ -1138,7 +1145,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <div className="w-px h-10 bg-white/5 mx-2"></div>
-                  <button onClick={() => setShowDeck(true)} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg">
+                  <button onClick={() => modals.open('deck')} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg">
                     <i className="fa-solid fa-chart-line"></i>
                   </button>
                 </div>
@@ -1211,7 +1218,7 @@ const App: React.FC = () => {
               <div className="space-y-10 animate-in slide-in-from-bottom-10 duration-1000">
                 <div id="phase-manifest" className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start scroll-mt-32">
                   <div className="lg:col-span-4 flex flex-col gap-6">
-                    <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={() => setShowAddCharacter(true)} onAudit={() => setShowAuditor(true)} />
+                    <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={() => modals.open('addCharacter')} onAudit={() => modals.open('auditor')} />
                     <div className="nm-panel p-8 border border-white/5 bg-black/40">
                       <h4 className="text-[10px] font-black text-white uppercase tracking-widest mb-6 flex items-center gap-3">
                         <i className="fa-solid fa-stethoscope text-luna-gold"></i> Directorial Audit
@@ -1226,7 +1233,7 @@ const App: React.FC = () => {
                           <i className="fa-solid fa-chevron-right text-[10px] text-luna-gold transition-transform group-hover:translate-x-1"></i>
                         </button>
                         <button
-                          onClick={() => setShowScriptDoctor(true)}
+                          onClick={() => modals.open('scriptDoctor')}
                           className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-solar-amber/30 transition-all border border-white/5"
                         >
                           <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Narrative Diagnostic</span>
@@ -1238,16 +1245,22 @@ const App: React.FC = () => {
                   <div className="lg:col-span-8 space-y-6">
                     <ProductionTimeline scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} />
 
+                    {/* B3 (audit slice): three legacy buttons (Storyboard /
+                        Asset Registry / Production Manifest) collapsed into
+                        one quick-pick row. Each opens the same unified
+                        AssetWorkspaceModal pre-targeted to the corresponding
+                        tab; the tab strip inside the modal handles further
+                        navigation without a round-trip to the dashboard. */}
                     <div className="flex flex-wrap sm:flex-nowrap gap-4">
-                      <button onClick={() => setShowStoryboard(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
+                      <button onClick={() => setAssetWorkspaceTab('storyboard')} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
                         <i className="fa-solid fa-grip text-luna-gold text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Storyboard View</span>
                       </button>
-                      <button onClick={() => setShowAssetLibrary(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
+                      <button onClick={() => setAssetWorkspaceTab('library')} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
                         <i className="fa-solid fa-photo-film text-solar-amber text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Asset Registry</span>
                       </button>
-                      <button onClick={() => setShowManifest(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
+                      <button onClick={() => setAssetWorkspaceTab('manifest')} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
                         <i className="fa-solid fa-file-invoice text-deep-sage text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Production Protocol</span>
                       </button>
@@ -1266,7 +1279,7 @@ const App: React.FC = () => {
                       <button onClick={handleManifestAll} disabled={isBatchProcessing} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
                         <i className="fa-solid fa-bolt-lightning animate-pulse"></i> Initialize Batch Manifest
                       </button>
-                      <button onClick={() => setShowMixer(true)} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
+                      <button onClick={() => modals.open('mixer')} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
                         <i className="fa-solid fa-sliders"></i>
                       </button>
                     </div>
@@ -1309,7 +1322,7 @@ const App: React.FC = () => {
                       <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Post-Production & Release</h3>
                       <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Neural mastering and distribution multipliers</p>
                     </div>
-                    <button onClick={() => setShowMastering(true)} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
+                    <button onClick={() => modals.open('mastering')} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
                       <i className="fa-solid fa-wand-magic-sparkles"></i> Open VFX Synthesis Lab
                     </button>
                   </div>
@@ -1333,13 +1346,20 @@ const App: React.FC = () => {
 
                       <div className="flex flex-col sm:flex-row gap-6 w-full sm:w-auto">
                         <button
-                          onClick={() => setShowPlayer(true)}
+                          onClick={() => modals.open('player')}
                           className="px-12 py-5 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] hover:bg-white/5 transition-all flex items-center justify-center gap-4 border border-white/10"
                         >
                           <i className="fa-solid fa-desktop"></i> Pre-Production Review
                         </button>
+                        <ServerRenderButton
+                          project={project}
+                          aspectRatio={aspectRatio}
+                          resolution={resolution}
+                          disabled={!isAllComplete}
+                          onLog={(message, type) => addLog(message, type)}
+                        />
                         <button
-                          onClick={() => setShowRenderer(true)}
+                          onClick={() => modals.open('renderer')}
                           disabled={!isAllComplete}
                           className="px-16 py-5 bg-gold-gradient text-white rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-30 disabled:hover:scale-100"
                         >
@@ -1429,7 +1449,7 @@ const App: React.FC = () => {
         );
       })()}
       {editingCharacter && <CharacterModal character={editingCharacter} onClose={() => setEditingCharacter(null)} onSave={handleCharacterSave} onRegenerateImage={async (id) => { const char = project.characters.find(c => c.id === id)!; const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed); handleCharacterSave({ ...char, referenceImageBase64: img }); }} />}
-      {showAddCharacter && <AddCharacterModal onClose={() => setShowAddCharacter(false)} onCreate={handleAddCharacter} />}
+      {modals.isOpen('addCharacter') && <AddCharacterModal onClose={() => modals.close('addCharacter')} onCreate={handleAddCharacter} />}
       {inspectingScene && <SceneInspector
         scene={inspectingScene}
         characters={project.characters}
@@ -1440,18 +1460,25 @@ const App: React.FC = () => {
         onRegenerate={phases => handleGenerateSceneAsset(inspectingScene.id, { phases })}
         onClose={() => setInspectingScene(null)}
       />}
-      {showAssetLibrary && <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={() => setShowAssetLibrary(false)} onSelect={scrollToScene} />}
-      {showMixer && <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={() => setShowMixer(false)} />}
-      {showAuditor && <ContinuityAuditor project={project} onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => s.charactersInScene.includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))} onClose={() => setShowAuditor(false)} />}
-      {showDeck && <DirectorialDeck project={project} onClose={() => setShowDeck(false)} />}
-      {showBRoll && <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={() => setShowBRoll(false)} />}
-      {showStoryboard && <StoryboardView scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} onClose={() => setShowStoryboard(false)} />}
-      {showScriptDoctor && <ScriptDoctor project={project} onClose={() => setShowScriptDoctor(false)} />}
-      {showMastering && <VFXMaster mastering={project.mastering} cinematicProfile={project.cinematicProfile} onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))} onClose={() => setShowMastering(false)} />}
+      {assetWorkspaceTab && (
+        <AssetWorkspaceModal
+          project={project}
+          youtubeMetadata={project.youtubeMetadata}
+          activeTab={assetWorkspaceTab}
+          onTabChange={setAssetWorkspaceTab}
+          onSelectScene={scrollToScene}
+          onClose={() => setAssetWorkspaceTab(null)}
+        />
+      )}
+      {modals.isOpen('mixer') && <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={() => modals.close('mixer')} />}
+      {modals.isOpen('auditor') && <ContinuityAuditor project={project} onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => s.charactersInScene.includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))} onClose={() => modals.close('auditor')} />}
+      {modals.isOpen('deck') && <DirectorialDeck project={project} onClose={() => modals.close('deck')} />}
+      {modals.isOpen('broll') && <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={() => modals.close('broll')} />}
+      {modals.isOpen('scriptDoctor') && <ScriptDoctor project={project} onClose={() => modals.close('scriptDoctor')} />}
+      {modals.isOpen('mastering') && <VFXMaster mastering={project.mastering} cinematicProfile={project.cinematicProfile} onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))} onClose={() => modals.close('mastering')} />}
       {project.activeDraft && <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />}
-      {showPlayer && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => setShowPlayer(false)} />}
-      {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} keyArtSceneId={project.keyArtSceneId} metadata={project.youtubeMetadata} onCancel={() => setShowRenderer(false)} onComplete={() => { }} onLog={addLog} />}
-      {showManifest && <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata ?? null} onClose={() => setShowManifest(false)} />}
+      {modals.isOpen('player') && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => modals.close('player')} />}
+      {modals.isOpen('renderer') && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} keyArtSceneId={project.keyArtSceneId} metadata={project.youtubeMetadata} onCancel={() => modals.close('renderer')} onComplete={() => { }} onLog={addLog} />}
 
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} onCancel={handleCancelBatch} isCancelling={isCancellingBatch} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
