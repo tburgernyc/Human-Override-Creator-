@@ -12,6 +12,8 @@ import { LandingPage } from './components/LandingPage';
 import { ProjectsView } from './components/ProjectsView';
 import { SceneInspector } from './components/SceneInspector';
 import { ProductionManifest } from './components/ProductionManifest';
+import { BatchManifestConfirmModal } from './components/BatchManifestConfirmModal';
+import { estimateBatchCost, type BatchCostEstimate } from './services/costEstimator';
 import { ProductionTimeline } from './components/ProductionTimeline';
 import { CastEnsemble } from './components/CastEnsemble';
 import { DirectorAssistant } from './components/DirectorAssistant';
@@ -160,6 +162,7 @@ const App: React.FC = () => {
   const [showRenderer, setShowRenderer] = useState(false);
   const [showMastering, setShowMastering] = useState(false);
   const [showManifest, setShowManifest] = useState(false);
+  const [batchConfirm, setBatchConfirm] = useState<{ estimate: BatchCostEstimate; runtimeMin: number } | null>(null);
   const [showAssetLibrary, setShowAssetLibrary] = useState(false);
   const [showMixer, setShowMixer] = useState(false);
   const [showAuditor, setShowAuditor] = useState(false);
@@ -728,6 +731,23 @@ const App: React.FC = () => {
     }
   };
 
+  const openBatchConfirm = () => {
+    if (isBatchProcessing) return;
+    // Re-compute pending with the same filter handleManifestAll uses. If empty,
+    // skip the modal and just log — matches the existing no-op behavior inside
+    // handleManifestAll.
+    const pending = project.scenes.filter(
+      scene => project.assets[scene.id]?.status !== 'complete',
+    );
+    if (pending.length === 0) {
+      addLog('All scenes already complete — nothing to manifest.', 'system');
+      return;
+    }
+    const estimate = estimateBatchCost(pending, resolution);
+    const runtimeMin = Math.max(1, Math.ceil(pending.length * 1.5));
+    setBatchConfirm({ estimate, runtimeMin });
+  };
+
   const handleManifestAll = async () => {
     if (isBatchProcessing) return;
     batchCancelRef.current.cancelled = false;
@@ -915,7 +935,7 @@ const App: React.FC = () => {
         step: 2,
         title: 'Generate all scenes',
         desc: `${totalSceneCount} scene${totalSceneCount === 1 ? '' : 's'} ready to manifest. Estimated runtime: ~${Math.max(1, Math.ceil(totalSceneCount * 1.5))} min.`,
-        action: { label: 'Initialize Batch Manifest', onClick: handleManifestAll },
+        action: { label: 'Initialize Batch Manifest', onClick: openBatchConfirm },
       };
     }
     if (pending > 0) {
@@ -923,7 +943,7 @@ const App: React.FC = () => {
         step: 2,
         title: `Finish remaining ${pending} scene${pending === 1 ? '' : 's'}`,
         desc: `${completeSceneCount}/${totalSceneCount} complete. Resume the batch to fill in the rest.`,
-        action: { label: 'Continue Batch Manifest', onClick: handleManifestAll },
+        action: { label: 'Continue Batch Manifest', onClick: openBatchConfirm },
       };
     }
     return {
@@ -1272,6 +1292,17 @@ const App: React.FC = () => {
       </aside>
 
       {/* MODALS */}
+      {batchConfirm && (
+        <BatchManifestConfirmModal
+          estimate={batchConfirm.estimate}
+          runtimeMin={batchConfirm.runtimeMin}
+          onCancel={() => setBatchConfirm(null)}
+          onContinue={() => {
+            setBatchConfirm(null);
+            handleManifestAll();
+          }}
+        />
+      )}
       {editingCharacter && <CharacterModal character={editingCharacter} onClose={() => setEditingCharacter(null)} onSave={handleCharacterSave} onRegenerateImage={async (id) => { const char = project.characters.find(c => c.id === id)!; const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed); handleCharacterSave({ ...char, referenceImageBase64: img }); }} />}
       {showAddCharacter && <AddCharacterModal onClose={() => setShowAddCharacter(false)} onCreate={handleAddCharacter} />}
       {inspectingScene && <SceneInspector scene={inspectingScene} characters={project.characters} assetImage={project.assets[inspectingScene.id]?.imageUrl} onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))} onClose={() => setInspectingScene(null)} />}
