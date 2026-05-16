@@ -5,10 +5,13 @@ Run after Phase 2/3 changes to confirm video output quality.
 ## 1. Helper unit tests (automated)
 
 ```bash
-node scripts/smoke-helpers.test.mjs
+npm test
 ```
 
-Validates: `pickMimeType` fallback order, `computeBitrate` scaling, `sniffWavHeader` WAV detection, `stripDataUriPrefix`, `parseJsonResponse`.
+Runs three suites under `tsx` (also gated in CI):
+- `scripts/smoke-helpers.test.mts` — pure helpers (`pickMimeType` fallback order, `computeBitrate`, `sniffWavHeader`, `stripDataUriPrefix`, `parseJsonResponse`), real `normalizeLutPreset` from `services/lutMigration.ts`, `buildLutArg` against the canonical `LUT_PRESETS` import, plus a drift assertion guarding `server/proxy.ts`'s local `LUT_PRESETS` against `types.ts`, and the pure parsers from `verify-mp4.mjs`.
+- `scripts/lut-migration.test.mts` — 11 load-bearing assertions on the legacy LUT enum migration.
+- `scripts/verify-mp4-fixture.test.mts` — end-to-end coverage for `verify-mp4.mjs` by generating synthetic good/bad MP4s via `ffmpeg-static` and asserting the right PASS/FAIL outcomes.
 
 ## 2. End-to-end render verification (manual)
 
@@ -232,6 +235,7 @@ The script covers:
 
 | # | Check | Mechanism |
 |---|---|---|
+| 1* | Decodes without errors end-to-end | `ffmpeg -v error -i mp4 -f null -` (mechanical proxy for "plays in QuickTime/VLC/`<video>`"; visual glitches like green frames or A/V drift still need eyeballs) |
 | 2 | H.264 video + AAC audio codecs | ffmpeg stream-info probe |
 | 3 | Integrated loudness within ±0.5 LU of -14 LUFS | ffmpeg `loudnorm=print_format=summary` |
 | 4 | True peak ≤ -1.0 dBTP | same loudnorm pass |

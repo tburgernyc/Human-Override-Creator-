@@ -1,28 +1,34 @@
-#!/usr/bin/env node
-// Smoke tests for the pure helper functions added in Phase 2/3.
-// These cover the new code paths most prone to regression:
-// - codec fallback (pickMimeType)
-// - adaptive bitrate (computeBitrate)
-// - WAV header sniffing (sniffWavHeader)
-// - data URI stripping (stripDataUriPrefix)
-// - safe JSON parsing (parseJsonResponse)
+#!/usr/bin/env -S npx tsx
+// Smoke tests for pure helper functions across Phase 2/3 + Phase 14.
+// Runs under tsx so the LUT migration tests can import the real production
+// helpers (services/lutMigration.ts, types.ts) instead of mirroring them.
 //
-// Run with: node scripts/smoke-helpers.test.mjs
+// Covers: pickMimeType fallback order, computeBitrate scaling, WAV header
+// sniffing, data URI stripping, JSON response parsing, normalizeLutPreset
+// (real, not mirrored), buildLutArg (logic mirror — extraction is blocked by
+// server/tsconfig.json's standalone scope; a drift assertion guards the
+// server's local LUT_PRESETS copy), and the verify-mp4.mjs pure parsers.
+//
+// Run with: npx tsx scripts/smoke-helpers.test.mts
 //
 // Visual/audio output verification is manual — see scripts/MANUAL_SMOKE.md.
 
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 let passed = 0;
 let failed = 0;
-const test = (name, fn) => {
+const test = (name: string, fn: () => void) => {
   try { fn(); console.log(`  ok  ${name}`); passed++; }
-  catch (e) { console.log(`  FAIL  ${name}\n    ${e.message}`); failed++; }
+  catch (e: any) { console.log(`  FAIL  ${name}\n    ${e.message}`); failed++; }
 };
 
 // ---------- computeBitrate ----------
 // Mirrors components/Renderer.tsx: width * height * fps * 0.1, clamped [2_000_000, 20_000_000]
-const computeBitrate = (w, h, fps) => Math.max(2_000_000, Math.min(20_000_000, Math.round(w * h * fps * 0.1)));
+const computeBitrate = (w: number, h: number, fps: number) =>
+  Math.max(2_000_000, Math.min(20_000_000, Math.round(w * h * fps * 0.1)));
 
 console.log('\ncomputeBitrate');
 test('720p 30fps yields ~2.76 Mbps clamped above floor', () => {
@@ -63,7 +69,7 @@ test('h264 third, plain webm last', () => {
 
 // ---------- sniffWavHeader ----------
 // Port of services/gemini.ts implementation, validated against a known WAV header.
-const sniffWavHeader = (bytes) => {
+const sniffWavHeader = (bytes: Uint8Array) => {
   if (bytes.length < 44) return null;
   const isRiff = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
   const isWave = bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45;
@@ -88,7 +94,7 @@ const sniffWavHeader = (bytes) => {
 };
 
 // Build a minimal valid PCM WAV header: 24kHz mono 16-bit, 4 bytes of PCM
-const makeWav = (sampleRate, channels) => {
+const makeWav = (sampleRate: number, channels: number) => {
   const buf = new ArrayBuffer(44 + 4);
   const v = new DataView(buf);
   const u = new Uint8Array(buf);
@@ -127,7 +133,7 @@ test('returns null for too-short payload', () => {
 });
 
 // ---------- stripDataUriPrefix ----------
-const stripDataUriPrefix = (s) => {
+const stripDataUriPrefix = (s: string) => {
   const idx = s.indexOf(',');
   if (idx < 0) throw new Error('Expected data URI with base64 prefix, got raw string.');
   return s.slice(idx + 1);
@@ -145,13 +151,13 @@ test('throws on raw base64 without prefix', () => {
 });
 
 // ---------- parseJsonResponse ----------
-const cleanJsonResponse = (text) => {
+const cleanJsonResponse = (text: string) => {
   let clean = text.trim();
   if (clean.startsWith('```json')) clean = clean.replace(/^```json\s*/, '').replace(/\s*```$/, '');
   else if (clean.startsWith('```')) clean = clean.replace(/^```\s*/, '').replace(/\s*```$/, '');
   return clean;
 };
-const parseJsonResponse = (text, fallback) => {
+const parseJsonResponse = (text: string, fallback?: unknown): unknown => {
   const raw = text || '';
   const cleaned = cleanJsonResponse(raw);
   if (!cleaned) {
@@ -159,7 +165,7 @@ const parseJsonResponse = (text, fallback) => {
     throw new Error('Gemini returned an empty response (likely safety-filtered).');
   }
   try { return JSON.parse(cleaned); }
-  catch (e) {
+  catch (e: any) {
     throw new Error(`Failed to parse JSON response from Gemini: ${e.message}\nFirst 500 chars: ${raw.slice(0, 500)}`);
   }
 };
@@ -184,34 +190,17 @@ test('throws with raw text on malformed JSON', () => {
   try {
     parseJsonResponse('not json {');
     assert.fail('should have thrown');
-  } catch (e) {
+  } catch (e: any) {
     assert.match(e.message, /Failed to parse JSON/);
     assert.match(e.message, /not json/);
   }
 });
 
 // ---------- normalizeLutPreset (Phase 14) ----------
-// Mirrors App.tsx — old `lutPreset` enum values map to new filmstock names
-// at read time so pre-Phase-14 projects keep their selection.
-const LUT_PRESETS = [
-  'none',
-  'kodak_vision3_250d',
-  'fuji_eterna_250d',
-  'kodak_2383',
-  'arri_logc_to_rec709',
-  'bleach_bypass',
-];
-const LEGACY_LUT_MAP = {
-  kodak_5219:  'kodak_vision3_250d',
-  fuji_400h:   'fuji_eterna_250d',
-  noir:        'bleach_bypass',
-  technicolor: 'kodak_2383',
-};
-const normalizeLutPreset = (raw) => {
-  if (typeof raw !== 'string' || raw === 'none') return 'none';
-  if (LUT_PRESETS.includes(raw)) return raw;
-  return LEGACY_LUT_MAP[raw] ?? 'none';
-};
+// Import the real production helpers instead of mirroring them. A renamed
+// export or a changed mapping table now fails the test loudly.
+import { normalizeLutPreset, LEGACY_LUT_MAP } from '../services/lutMigration';
+import { LUT_PRESETS } from '../types';
 
 console.log('\nnormalizeLutPreset');
 test('legacy kodak_5219 → kodak_vision3_250d', () => {
@@ -235,22 +224,57 @@ test('unknown value falls back to none', () => {
 test('undefined falls back to none', () => {
   assert.equal(normalizeLutPreset(undefined), 'none');
 });
+test('LEGACY_LUT_MAP entries all point at canonical presets', () => {
+  for (const [legacy, canonical] of Object.entries(LEGACY_LUT_MAP)) {
+    assert.ok(
+      (LUT_PRESETS as readonly string[]).includes(canonical),
+      `LEGACY_LUT_MAP["${legacy}"] = "${canonical}" is not in types.ts LUT_PRESETS`,
+    );
+  }
+});
+
+// ---------- LUT_PRESETS drift (Phase 14) ----------
+// The server keeps its own LUT_PRESETS array because server/tsconfig.json's
+// include set is scoped to `./**/*.ts` (deliberate — server stays standalone).
+// That means a preset added to types.ts + App.tsx but forgotten in
+// server/proxy.ts would silently downgrade transcodes to no-LUT. Re-read the
+// server file at test time and deep-equal its local array against the source
+// of truth in types.ts.
+const SMOKE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(SMOKE_DIR, '..');
+const REPO_LUTS_DIR = path.join(REPO_ROOT, 'public', 'luts');
+
+const extractServerLutPresets = (): string[] => {
+  const src = readFileSync(path.join(REPO_ROOT, 'server', 'proxy.ts'), 'utf8');
+  // Match `const LUT_PRESETS = [ ... ] as const;` (or without the as const).
+  // Captures the array body, then pulls each single-quoted string out of it.
+  const arrayMatch = src.match(/const\s+LUT_PRESETS\s*=\s*\[([\s\S]*?)\]\s*(?:as\s+const)?\s*;/);
+  if (!arrayMatch) throw new Error('Could not locate LUT_PRESETS array in server/proxy.ts');
+  const items = Array.from(arrayMatch[1].matchAll(/'([^']+)'/g)).map(m => m[1]);
+  if (items.length === 0) throw new Error('Parsed LUT_PRESETS array from server/proxy.ts but it was empty');
+  return items;
+};
+
+console.log('\nLUT_PRESETS drift between types.ts and server/proxy.ts');
+test('server/proxy.ts LUT_PRESETS deep-equals types.ts LUT_PRESETS', () => {
+  const serverPresets = extractServerLutPresets();
+  assert.deepEqual(
+    serverPresets,
+    [...LUT_PRESETS],
+    'server/proxy.ts has drifted from types.ts — sync the LUT_PRESETS array',
+  );
+});
 
 // ---------- buildLutArg (Phase 14) ----------
-// Mirrors server/proxy.ts. The arg builder downgrades silently when a
+// Mirrors server/proxy.ts:317. The arg builder downgrades silently when a
 // preset is missing, invalid, or the .cube file doesn't exist on disk.
-// We exercise the validation+formatting half here; the fs.existsSync half
-// is covered by the manual smoke test (renaming a real .cube file).
-import { existsSync } from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+// We exercise the validation+formatting half here against the real LUT_PRESETS
+// import; the fs.existsSync half is covered by the manual smoke test
+// (renaming a real .cube file).
 
-const SMOKE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const REPO_LUTS_DIR = path.resolve(SMOKE_DIR, '..', 'public', 'luts');
-
-const buildLutArg = (preset, lutsDir) => {
+const buildLutArg = (preset: string | null | undefined, lutsDir: string): { arg: string; preset: string } | null => {
   if (!preset || preset === 'none') return null;
-  if (!LUT_PRESETS.includes(preset)) return null;
+  if (!(LUT_PRESETS as readonly string[]).includes(preset)) return null;
   const filePath = path.join(lutsDir, `${preset}.cube`);
   if (!existsSync(filePath)) return null;
   return { arg: `lut3d='${filePath}'`, preset };

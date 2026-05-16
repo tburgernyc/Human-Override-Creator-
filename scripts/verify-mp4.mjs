@@ -2,10 +2,12 @@
 // Mechanical checks for the "YouTube-ready" verification checklist at
 // docs/superpowers/specs/2026-05-14-youtube-quality-plan.md §6.
 //
-// Wraps the bundled ffmpeg-static binary to verify codecs, loudness, true
-// peak, thumbnail dimensions, and the structural shape of the SRT + metadata
-// exports. Items 1 (visual playback), 8 (3-min render stability), and 9
-// (YouTube upload preview) remain manual.
+// Wraps the bundled ffmpeg-static binary to verify codecs, decode integrity,
+// loudness, true peak, thumbnail dimensions, and the structural shape of the
+// SRT + metadata exports. The decode-clean check is a mechanical proxy for
+// item 1; full visual playback in QuickTime/VLC/<video> still warrants human
+// eyeballs. Items 8 (3-min render stability) and 9 (YouTube upload preview)
+// remain fully manual.
 //
 // Usage:
 //   node scripts/verify-mp4.mjs --mp4 <path> [--srt <path>] \
@@ -159,6 +161,26 @@ function checkVideo(mp4Path, results) {
   record(results, 'Audio codec is AAC', audio === 'aac', `got ${audio ?? '<none>'}`);
 }
 
+// Mechanical proxy for sign-off item 1 ("plays in QuickTime / VLC / <video>"):
+// stream the whole file through ffmpeg's null muxer at log level `error`.
+// A clean decode produces empty stderr. Any decoder issue (corrupt moov atom,
+// AAC sync loss, truncated stream, bad SPS/PPS) surfaces here. Faster than
+// any of the three players this approximates and runs in CI.
+function checkDecodeClean(mp4Path, results) {
+  const { stderr, status } = runFfmpeg([
+    '-hide_banner', '-nostats',
+    '-v', 'error',
+    '-i', mp4Path,
+    '-f', 'null', '-',
+  ]);
+  const trimmed = stderr.trim();
+  const pass = status === 0 && trimmed.length === 0;
+  const detail = pass
+    ? 'no decoder errors'
+    : `exit ${status}${trimmed ? `, stderr: ${trimmed.slice(0, 200)}` : ''}`;
+  record(results, 'Decodes without errors end-to-end', pass, detail);
+}
+
 function checkLoudnorm(mp4Path, results) {
   const { stderr } = runFfmpeg([
     '-hide_banner', '-nostats',
@@ -255,12 +277,15 @@ Usage:
   node scripts/verify-mp4.mjs --mp4 <path> [--srt <path>] \\
                               [--thumbnail <path>] [--metadata <path>]
 
-Runs the mechanical checks (items 2-7) from the YouTube-ready checklist.
-Each check prints PASS/FAIL with the measured value. Exits non-zero on
-any failure so the runbook can paste-and-stop on a regression.
+Runs the mechanical checks (items 2-7) from the YouTube-ready checklist
+plus an automated decode-clean proxy for item 1. Each check prints
+PASS/FAIL with the measured value. Exits non-zero on any failure so the
+runbook can paste-and-stop on a regression.
 
-Items left manual:
-  1. .mp4 plays in QuickTime, VLC, and a <video> element
+Items still requiring human eyeballs:
+  1. Full visual playback in QuickTime, VLC, and a <video> element
+     (the decode-clean check below catches decoder errors but not visual
+     glitches like green frames or A/V drift)
   8. 3-minute project renders without browser crash
   9. YouTube upload — preview plays with voice + music + ambient + captions
 
@@ -306,6 +331,7 @@ function main(argv) {
 
   const results = [];
   checkVideo(args.mp4, results);
+  checkDecodeClean(args.mp4, results);
   checkLoudnorm(args.mp4, results);
   if (args.srt) checkSrt(args.srt, results);
   if (args.thumbnail) checkThumbnail(args.thumbnail, results);

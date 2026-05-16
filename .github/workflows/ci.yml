@@ -1,6 +1,7 @@
-# CI: typecheck + build verification on every push/PR (CH4).
-# Tests aren't wired into the project yet (Phase 11 CH5 deferred) — when they
-# arrive, add a `npm test` step before `npm run build` and gate releases on it.
+# CI: typecheck + test + build on every push/PR. `npm test` runs the
+# unit/integration suites under tsx (smoke-helpers, lut-migration, and the
+# verify-mp4 fixture e2e), gating merges on regressions before the slower
+# build step.
 name: CI
 
 on:
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   build:
-    name: Typecheck + build
+    name: Typecheck + test + build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -36,6 +37,9 @@ jobs:
 
       - name: Typecheck (server)
         run: npx tsc --noEmit -p server/tsconfig.json
+
+      - name: Test
+        run: npm test
 
       - name: Build
         run: npm run build
