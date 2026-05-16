@@ -265,6 +265,36 @@ test('server/proxy.ts LUT_PRESETS deep-equals types.ts LUT_PRESETS', () => {
   );
 });
 
+// ---------- MODEL_COSTS_USD drift (Phase 15 G11) ----------
+// The estimator at services/costEstimator.ts depends on four keys from
+// MODEL_COSTS_USD: IMAGE, VIDEO, VIDEO_FAST, TTS. Each of those must also
+// exist in MODEL_NAMES — otherwise the estimator references a model the
+// codebase no longer uses. Catches drift in both directions.
+import { MODEL_COSTS_USD, MODEL_NAMES } from '../constants';
+
+const ESTIMATOR_REFERENCED_KEYS = ['IMAGE', 'VIDEO', 'VIDEO_FAST', 'TTS'] as const;
+
+console.log('\nMODEL_COSTS_USD drift vs MODEL_NAMES');
+test('every key the estimator references exists in MODEL_COSTS_USD', () => {
+  for (const k of ESTIMATOR_REFERENCED_KEYS) {
+    assert.ok(
+      k in MODEL_COSTS_USD,
+      `MODEL_COSTS_USD is missing required key "${k}" — the estimator depends on it`,
+    );
+    assert.equal(typeof MODEL_COSTS_USD[k], 'number');
+    assert.ok(MODEL_COSTS_USD[k] >= 0, `MODEL_COSTS_USD["${k}"] must be ≥ 0`);
+  }
+});
+
+test('every key in MODEL_COSTS_USD has a matching key in MODEL_NAMES', () => {
+  for (const k of Object.keys(MODEL_COSTS_USD)) {
+    assert.ok(
+      k in MODEL_NAMES,
+      `MODEL_COSTS_USD["${k}"] has no matching MODEL_NAMES["${k}"] — remove the price or add the model`,
+    );
+  }
+});
+
 // ---------- buildLutArg (Phase 14) ----------
 // Mirrors server/proxy.ts:317. The arg builder downgrades silently when a
 // preset is missing, invalid, or the .cube file doesn't exist on disk.
