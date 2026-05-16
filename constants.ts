@@ -7,6 +7,19 @@ export const MODEL_NAMES = {
   CHECK: 'gemini-3-flash-preview',
 };
 
+// Phase 15 G11 — directional per-call USD costs used by services/costEstimator
+// to show a pre-flight estimate before the Manifest All batch fires. Keep flat
+// per-call (no per-resolution or per-second modeling); the modal is for order-
+// of-magnitude awareness, not accounting accuracy.
+// Source: https://ai.google.dev/gemini-api/docs/pricing — as of 2026-05-16.
+// Refresh when Gemini publishes new rates.
+export const MODEL_COSTS_USD: Record<'IMAGE' | 'VIDEO' | 'VIDEO_FAST' | 'TTS', number> = {
+  IMAGE:      0.04,
+  VIDEO:      1.50,
+  VIDEO_FAST: 0.45,
+  TTS:        0.02,
+};
+
 export interface VoicePreset {
   id: string;
   label: string;
