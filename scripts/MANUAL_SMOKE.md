@@ -293,3 +293,29 @@ Notes:
 ```
 
 Once all four boxes are checked, edit `docs/superpowers/specs/2026-05-14-youtube-quality-plan.md` lines 186-194 — replace each `- [ ]` with `- [x] <date>` so the project state reflects that Phase 14 has been formally verified.
+
+## 7. Phase 15 G11 — Batch Manifest cost confirm modal
+
+Verifies the pre-flight cost estimate intercepts the Manifest All click.
+
+### 7.1 Modal opens with non-zero estimate (FREE — no Gemini calls)
+
+1. `npm run dev:all` and open `http://localhost:3000`.
+2. Open or create a project with ≥1 pending scene.
+3. Click **"Initialize Batch Manifest"**.
+4. **Expected:** modal shows `N scenes pending`, a `$X.XX` figure, breakdown line (`N images · N videos · N TTS calls`), runtime estimate (`~Y min`), and Cancel + Continue buttons.
+5. Click **Cancel**. Modal closes, no log entry, no batch starts.
+6. Re-open the modal. Click on the dark area outside the card. Same outcome.
+
+### 7.2 Continue fires the batch (PAID — runs the real flow)
+
+1. With the modal open, click **Continue**.
+2. **Expected:** modal closes; the log shows `Batch Manifesting Sequence Initialized…`; scenes progress through the existing concurrency=2 pipeline.
+
+### 7.3 Zero pending scenes skips the modal
+
+1. With a project where every scene is already complete, the dashboard's call-to-action button changes to **"Initialize Master Export"** — no Manifest All button is shown. Clicking elsewhere does not open the cost modal.
+
+### 7.4 Pricing drift sanity (automated)
+
+Pricing constants in `constants.ts` (`MODEL_COSTS_USD`) are dated in their header comment. When Gemini publishes new rates, update the values and the date. The drift assertion in `scripts/smoke-helpers.test.mts` covers structural drift (missing or extra keys vs `MODEL_NAMES`) — value drift is by design and intentional, not gated.
