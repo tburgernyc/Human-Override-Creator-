@@ -8,10 +8,14 @@ Run after Phase 2/3 changes to confirm video output quality.
 npm test
 ```
 
-Runs three suites under `tsx` (also gated in CI):
-- `scripts/smoke-helpers.test.mts` — pure helpers (`pickMimeType` fallback order, `computeBitrate`, `sniffWavHeader`, `stripDataUriPrefix`, `parseJsonResponse`), real `normalizeLutPreset` from `services/lutMigration.ts`, `buildLutArg` against the canonical `LUT_PRESETS` import, plus a drift assertion guarding `server/proxy.ts`'s local `LUT_PRESETS` against `types.ts`, and the pure parsers from `verify-mp4.mjs`.
-- `scripts/lut-migration.test.mts` — 11 load-bearing assertions on the legacy LUT enum migration.
-- `scripts/verify-mp4-fixture.test.mts` — end-to-end coverage for `verify-mp4.mjs` by generating synthetic good/bad MP4s via `ffmpeg-static` and asserting the right PASS/FAIL outcomes.
+Runs the full Vitest suite (also gated in CI). Test files live in `/tests/`:
+- `tests/smoke-helpers.test.ts` — pure helpers (`pickMimeType` fallback order, `computeBitrate`, `sniffWavHeader`, `stripDataUriPrefix`, `parseJsonResponse`), real `normalizeLutPreset` from `services/lutMigration.ts`, `buildLutArg` against the canonical `LUT_PRESETS` import, plus a drift assertion guarding `server/proxy.ts`'s local `LUT_PRESETS` against `types.ts`, and the pure parsers from `verify-mp4.mjs`.
+- `tests/lut-migration.test.ts` — 11 load-bearing assertions on the legacy LUT enum migration.
+- `tests/cost-estimator.test.ts` — pure arithmetic for the G11 batch cost estimator.
+- `tests/narration-hash.test.ts` — stable hashing + stale-audio detector for the per-phase regen flow.
+- `tests/gemini.test.ts` — base64 round-trip + `optimizeVisualPrompt` with a mocked `@google/genai` SDK (asserts model selection, prompt shape, empty-response fallback, error propagation).
+- `tests/lruCache.test.ts` — bounded LRU used by the Renderer for audio buffers (eviction order, recency bumps, onEvict hook).
+- `tests/verify-mp4-fixture.test.ts` — end-to-end coverage for `verify-mp4.mjs` by generating synthetic good/bad MP4s via `ffmpeg-static` and asserting the right PASS/FAIL outcomes.
 
 ## 2. End-to-end render verification (manual)
 
@@ -385,3 +389,31 @@ Verifies that the SceneInspector header buttons let the user regenerate image, v
 
 1. With a never-generated scene, click Take → Delete Scene. The modal copy reads "The scene will be removed from the timeline."
 2. With a fully-generated scene, the modal copy reads "The scene and its generated image, video, and audio will be removed from the timeline."
+
+## 10. Bounded audio-buffer cache during render (audit slice A4)
+
+The Renderer keeps decoded music + ambient `AudioBuffer`s in a bounded LRU
+(`services/lruCache.ts`, capped at 8 music + 6 ambient entries) instead of
+unbounded `Map`s. This is the manual heap check that confirms long renders
+stay within budget.
+
+### 10.1 30-scene render stays under 1 GB heap (PAID — full render)
+
+1. Open a project with 30+ scenes spanning at least 3 different `musicMood`
+   values and at least 2 `ambientSfx` values.
+2. Open DevTools → Memory → take a baseline heap snapshot before clicking
+   **Initialize Master Export**.
+3. Run the export. Take another snapshot at the 50% mark and a final one
+   on completion.
+4. **Expected:** total JS heap stays under 1 GB throughout. The
+   `musicBufferCache` and `ambientBufferCache` retainers should be visible
+   in the snapshot and capped at MUSIC_CACHE_CAP / AMBIENT_CACHE_CAP entries
+   (8 / 6 respectively).
+
+### 10.2 LRU eviction is silent in the log (FREE)
+
+1. During an export, watch the production log for any error / warning lines.
+2. **Expected:** no `Ambient SFX failed` or `Music buffer failed` lines
+   triggered by eviction. Eviction is in-memory only and does not interact
+   with any active `AudioBufferSourceNode` (sources hold their own buffer
+   ref until they stop).

@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "server": "npx tsx server/proxy.ts",
     "start": "NODE_ENV=production npx tsx server/proxy.ts",
-    "test": "tsx scripts/smoke-helpers.test.mts && tsx scripts/lut-migration.test.mts && tsx scripts/cost-estimator.test.mts && tsx scripts/narration-hash.test.mts && tsx scripts/verify-mp4-fixture.test.mts"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@google/genai": "^1.40.0",
@@ -33,9 +34,11 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "@vitest/coverage-v8": "^4.1.6",
     "concurrently": "^9.2.1",
     "tsx": "^4.22.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vitest": "^4.1.6"
   }
 }
