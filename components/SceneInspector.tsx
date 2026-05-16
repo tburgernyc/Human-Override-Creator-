@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
-import { Scene, Character, TransitionType, CameraMotion, DialogueLine, ColorGrade, TextOverlay, GeneratedAssets } from '../types';
+import { Scene, Character, TransitionType, CameraMotion, DialogueLine, ColorGrade, TextOverlay, GeneratedAssets, Resolution } from '../types';
 import { optimizeVisualPrompt } from '../services/gemini';
 import { isAudioStale } from '../services/narrationHash';
+import { MODEL_COSTS_USD } from '../constants';
 
 export type RegenPhases = { image?: boolean; video?: boolean; audio?: boolean };
 
@@ -11,10 +12,13 @@ interface SceneInspectorProps {
     characters: Character[];
     assetImage?: string;
     currentAsset?: GeneratedAssets[string];
+    resolution?: Resolution;
     onUpdate: (updatedScene: Scene) => void;
     onRegenerate?: (phases: RegenPhases) => void;
     onClose: () => void;
 }
+
+const formatUsd = (n: number) => `$${n.toFixed(2)}`;
 
 const AMBIENT_PRESETS = [
     { label: 'None', value: 'none', icon: 'fa-volume-mute' },
@@ -41,7 +45,7 @@ const TEXT_ANIMATIONS = [
     { label: 'Cinematic Zoom', value: 'zoom_in' }
 ];
 
-export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, characters, assetImage, currentAsset, onUpdate, onRegenerate, onClose }) => {
+export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, characters, assetImage, currentAsset, resolution, onUpdate, onRegenerate, onClose }) => {
     const [activeTab, setActiveTab] = useState<'optics' | 'narrative' | 'audio' | 'grading' | 'motion_gfx'>('optics');
     const [isOptimizing, setIsOptimizing] = useState(false);
 
@@ -50,6 +54,12 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
     const hasAudio = !!currentAsset?.audioUrl;
     const audioStale = isAudioStale(scene.narratorLines, currentAsset?.narrationHash, hasAudio);
     const isGenerating = currentAsset?.status === 'generating_image' || currentAsset?.status === 'generating_video' || currentAsset?.status === 'generating_audio';
+
+    // Per-phase cost — mirrors estimateBatchCost's per-scene math so the user sees
+    // the same dollar figure here that they saw in the batch confirm modal.
+    const imageCost = MODEL_COSTS_USD.IMAGE;
+    const videoCost = resolution === Resolution.FHD ? MODEL_COSTS_USD.VIDEO : MODEL_COSTS_USD.VIDEO_FAST;
+    const audioCost = MODEL_COSTS_USD.TTS;
 
     const triggerRegen = (phases: RegenPhases) => {
         if (!onRegenerate || isGenerating) return;
@@ -111,29 +121,32 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                 <button
                                     onClick={() => triggerRegen({ image: true, video: false, audio: false })}
                                     disabled={isGenerating}
-                                    title="Regenerate image only (reuses existing video and audio)"
+                                    title={`Regenerate image only (${formatUsd(imageCost)}) — reuses existing video and audio`}
                                     className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 hover:border-luna-gold/60 hover:bg-luna-gold/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[10px] font-bold text-celestial-stone uppercase tracking-widest flex items-center gap-2"
                                 >
                                     <i className="fa-solid fa-image"></i>
                                     Image
+                                    <span className="text-mystic-gray text-[9px] font-normal normal-case tracking-normal">{formatUsd(imageCost)}</span>
                                 </button>
                                 <button
                                     onClick={() => triggerRegen({ image: false, video: true, audio: false })}
                                     disabled={isGenerating || !hasImage}
-                                    title={hasImage ? "Regenerate video only (reuses existing image and audio)" : "Generate an image first to enable video regeneration"}
+                                    title={hasImage ? `Regenerate video only (${formatUsd(videoCost)}) — reuses existing image and audio` : "Generate an image first to enable video regeneration"}
                                     className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 hover:border-luna-gold/60 hover:bg-luna-gold/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[10px] font-bold text-celestial-stone uppercase tracking-widest flex items-center gap-2"
                                 >
                                     <i className="fa-solid fa-film"></i>
                                     Video
+                                    <span className="text-mystic-gray text-[9px] font-normal normal-case tracking-normal">{formatUsd(videoCost)}</span>
                                 </button>
                                 <button
                                     onClick={() => triggerRegen({ image: false, video: false, audio: true })}
                                     disabled={isGenerating}
-                                    title={audioStale ? "Audio is out of sync with current narration — click to re-synthesize" : "Regenerate audio only (reuses existing image and video)"}
+                                    title={audioStale ? `Audio is out of sync with current narration (${formatUsd(audioCost)}) — click to re-synthesize` : `Regenerate audio only (${formatUsd(audioCost)}) — reuses existing image and video`}
                                     className={`px-3 py-2 rounded-lg border disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 ${audioStale ? 'bg-luna-gold/20 border-luna-gold text-luna-gold animate-pulse hover:bg-luna-gold/30' : 'bg-white/5 border-white/10 text-celestial-stone hover:border-luna-gold/60 hover:bg-luna-gold/10'}`}
                                 >
                                     <i className="fa-solid fa-waveform-lines"></i>
                                     Audio
+                                    <span className={`text-[9px] font-normal normal-case tracking-normal ${audioStale ? 'text-luna-gold/80' : 'text-mystic-gray'}`}>{formatUsd(audioCost)}</span>
                                     {audioStale && <span className="w-1.5 h-1.5 rounded-full bg-luna-gold"></span>}
                                 </button>
                             </div>

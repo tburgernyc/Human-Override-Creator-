@@ -351,3 +351,37 @@ Verifies that the SceneInspector header buttons let the user regenerate image, v
 1. With a fully-generated scene, click **Image** in the inspector.
 2. **Expected:** image swaps in; video and audio remain the previous values. No new TTS or Veo call fires.
 3. The variants array gets one new entry (image was a visual change).
+
+## 9. UX wins — export project, per-scene cost, delete confirm (audit slice C1/C3/C7)
+
+### 9.1 Export Project as JSON round-trips through Import (FREE)
+
+1. `npm run dev:all` and open a project with at least one scene.
+2. In the Production Control header (next to the SaveIndicator), click the **download icon** (tooltip: "Export the current project…").
+3. **Expected:** browser downloads `<projectId>_<YYYY-MM-DD>.json`; the log shows `Project exported: … (X KB)`.
+4. Go back to the Projects view, click **Import**, and select the file you just exported.
+5. **Expected:** project loads with identical scenes, characters, settings, and generated assets. Variants and the narrationHash on each asset are preserved.
+
+### 9.2 Per-scene cost is visible on each regenerate button (FREE)
+
+1. Open any scene in the Deep Scene Inspector.
+2. **Expected:** the three header buttons each show a small dollar figure:
+   - **Image** — $0.04
+   - **Video** — $1.50 on FHD projects, $0.45 on HD projects
+   - **Audio** — $0.02
+3. Switch the project resolution between FHD and HD on the dashboard, then re-open the inspector.
+4. **Expected:** the Video figure updates to match the new resolution; Image and Audio do not change.
+
+### 9.3 Delete-scene confirm gate (FREE)
+
+1. On a scene with generated assets, click the **Take** button on the SceneCard to open the action menu.
+2. Click **Delete Scene** (the red trash entry below Clear Sequence).
+3. **Expected:** a confirmation modal opens — "Delete Scene #N?" — with Cancel and Delete buttons. The scene is still present in the timeline.
+4. Click **Cancel** (or the dark overlay outside the card). The modal closes; the scene is still present.
+5. Re-open the menu, click **Delete Scene**, then click the red **Delete Scene** button in the modal.
+6. **Expected:** the scene is removed from the timeline and a toast offering **Undo** appears. Click Undo and the scene reappears in its original position.
+
+### 9.4 Delete confirm copy reflects asset presence (FREE)
+
+1. With a never-generated scene, click Take → Delete Scene. The modal copy reads "The scene will be removed from the timeline."
+2. With a fully-generated scene, the modal copy reads "The scene and its generated image, video, and audio will be removed from the timeline."

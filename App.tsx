@@ -13,6 +13,7 @@ import { ProjectsView } from './components/ProjectsView';
 import { SceneInspector } from './components/SceneInspector';
 import { ProductionManifest } from './components/ProductionManifest';
 import { BatchManifestConfirmModal } from './components/BatchManifestConfirmModal';
+import { DeleteSceneConfirmModal } from './components/DeleteSceneConfirmModal';
 import { estimateBatchCost, type BatchCostEstimate } from './services/costEstimator';
 import { ProductionTimeline } from './components/ProductionTimeline';
 import { CastEnsemble } from './components/CastEnsemble';
@@ -170,6 +171,7 @@ const App: React.FC = () => {
   const [showMastering, setShowMastering] = useState(false);
   const [showManifest, setShowManifest] = useState(false);
   const [batchConfirm, setBatchConfirm] = useState<{ estimate: BatchCostEstimate; runtimeMin: number } | null>(null);
+  const [pendingDeleteSceneId, setPendingDeleteSceneId] = useState<string | null>(null);
   const [showAssetLibrary, setShowAssetLibrary] = useState(false);
   const [showMixer, setShowMixer] = useState(false);
   const [showAuditor, setShowAuditor] = useState(false);
@@ -879,6 +881,33 @@ const App: React.FC = () => {
     addLog(`${newScenes.length} B-Roll scenes injected.`, "success");
   };
 
+  // Audit slice C1 — symmetric to the existing import (fileInputRef onChange).
+  // Serializes the full ProjectState — including base64 asset blobs — so a
+  // re-import round-trips losslessly. Large projects (heavy video assets)
+  // will produce a large file; the smoke doc warns about this.
+  const handleExportProject = () => {
+    try {
+      const json = JSON.stringify(project, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      // ProjectState has no human-facing title field — use the projectId (slugified)
+      // so re-imports keep a consistent filename signature.
+      const safeTitle = (project.projectId || 'project').replace(/[^a-z0-9_\-]+/gi, '_').slice(0, 60) || 'project';
+      const stamp = new Date().toISOString().slice(0, 10);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeTitle}_${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addLog(`Project exported: ${a.download} (${(blob.size / 1024).toFixed(1)} KB)`, 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'unknown failure';
+      addLog(`Project export failed: ${msg}`, 'error');
+    }
+  };
+
   // Scene delete with undo (UX7). Snapshots the scene + its asset + its
   // position so a click on the toast restores everything to where it was.
   const handleDeleteScene = (id: string) => {
@@ -1063,6 +1092,14 @@ const App: React.FC = () => {
                     <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.4em] mt-1">Uplink: Core Intelligence Alpha</p>
                   </div>
                   <SaveIndicator state={saveState} />
+                  <button
+                    onClick={handleExportProject}
+                    title="Export the current project as a JSON file (round-trips through Import on the Projects screen)"
+                    aria-label="Export project as JSON"
+                    className="w-10 h-10 rounded-xl nm-button text-celestial-stone hover:text-luna-gold flex items-center justify-center transition-all hover:scale-105"
+                  >
+                    <i className="fa-solid fa-download text-xs"></i>
+                  </button>
                 </div>
 
                 <div className="flex bg-eclipse-black/40 p-1.5 rounded-2xl nm-inset-input border border-white/5 overflow-x-auto max-w-full scrollbar-hide">
@@ -1236,7 +1273,7 @@ const App: React.FC = () => {
                           onExtend={handleExtendScene}
                           onUpdate={(id, s) => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === id ? s : sc) }))}
                           onMove={(dir) => handleMoveScene(scene.id, dir)}
-                          onDelete={(id) => handleDeleteScene(id)}
+                          onDelete={(id) => setPendingDeleteSceneId(id)}
                           onDuplicate={() => setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: crypto.randomUUID() }] }))}
                           onInspect={setInspectingScene}
                           onSelectVariant={handleSelectVariant}
@@ -1361,6 +1398,28 @@ const App: React.FC = () => {
           }}
         />
       )}
+      {pendingDeleteSceneId && (() => {
+        const idx = project.scenes.findIndex(s => s.id === pendingDeleteSceneId);
+        if (idx < 0) {
+          // Scene vanished from under us — clear the pending state.
+          setPendingDeleteSceneId(null);
+          return null;
+        }
+        const asset = project.assets[pendingDeleteSceneId];
+        const hasAssets = !!(asset?.imageUrl || asset?.videoUrl || asset?.audioUrl);
+        const idToDelete = pendingDeleteSceneId;
+        return (
+          <DeleteSceneConfirmModal
+            sceneNumber={idx + 1}
+            hasGeneratedAssets={hasAssets}
+            onCancel={() => setPendingDeleteSceneId(null)}
+            onConfirm={() => {
+              setPendingDeleteSceneId(null);
+              handleDeleteScene(idToDelete);
+            }}
+          />
+        );
+      })()}
       {editingCharacter && <CharacterModal character={editingCharacter} onClose={() => setEditingCharacter(null)} onSave={handleCharacterSave} onRegenerateImage={async (id) => { const char = project.characters.find(c => c.id === id)!; const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed); handleCharacterSave({ ...char, referenceImageBase64: img }); }} />}
       {showAddCharacter && <AddCharacterModal onClose={() => setShowAddCharacter(false)} onCreate={handleAddCharacter} />}
       {inspectingScene && <SceneInspector
@@ -1368,6 +1427,7 @@ const App: React.FC = () => {
         characters={project.characters}
         assetImage={project.assets[inspectingScene.id]?.imageUrl}
         currentAsset={project.assets[inspectingScene.id]}
+        resolution={resolution}
         onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))}
         onRegenerate={phases => handleGenerateSceneAsset(inspectingScene.id, { phases })}
         onClose={() => setInspectingScene(null)}
