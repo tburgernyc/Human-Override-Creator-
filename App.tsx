@@ -44,7 +44,8 @@ import {
   synthesizeCharacterPersona,
   performFullAudit,
   analyzeViralPotential,
-  extendSceneVideo
+  extendSceneVideo,
+  isVeoPolicyError
 } from './services/gemini';
 import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
 import { saveAssets as saveAssetsToIDB, loadAssets as loadAssetsFromIDB, clearAssets as clearAssetsFromIDB, saveLog as saveLogToIDB, loadLog as loadLogFromIDB } from './services/assetStore';
@@ -698,7 +699,14 @@ const App: React.FC = () => {
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'generation failed';
-      addLog(`Sequence generation failed for Scene #${sceneIdx}: ${msg}`, "error");
+      // G12: when the failure is content-policy and both Veo attempts failed
+      // (the auto-rewrite retry inside generateSceneVideo also threw), tell
+      // the user to edit the visual prompt rather than just leaving them
+      // staring at a raw API error message.
+      const userMsg = isVeoPolicyError(error)
+        ? `Scene #${sceneIdx} was rejected by Veo content policy even after an auto-rewrite attempt — edit the visual prompt in the Deep Inspector and try again.`
+        : `Sequence generation failed for Scene #${sceneIdx}: ${msg}`;
+      addLog(userMsg, "error");
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], status: 'error', error: msg } } }));
     } finally {
       inFlightScenesRef.current.delete(sceneId);

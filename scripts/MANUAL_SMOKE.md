@@ -417,3 +417,43 @@ stay within budget.
    triggered by eviction. Eviction is in-memory only and does not interact
    with any active `AudioBufferSourceNode` (sources hold their own buffer
    ref until they stop).
+
+## 11. Phase 15 G12 — Veo content-policy auto-retry
+
+Verifies that a Veo prompt rejection no longer dead-ends the user mid-batch.
+The wrapper around `generateSceneVideo` detects 400 + safety/policy keywords
+in the upstream error, asks Gemini to rewrite the visual prompt in safer
+terms, and runs Veo once more with the rewrite.
+
+### 11.1 Successful recovery from a known-blocked prompt (PAID — 2 Veo calls)
+
+1. `npm run dev:all` and open a project with one scene.
+2. In the Deep Scene Inspector, set the **Visual Prompt** to something Veo
+   reliably rejects (e.g. a sentence including "drawing a firearm" or
+   another known content-policy trip).
+3. Click **Video** (the per-phase regenerate button) on the inspector header.
+4. **Expected:** the DevTools console shows a single
+   `Veo content-policy retry: rewrote prompt → "…"` info line. The second
+   Veo call succeeds and a video appears on the scene card. The production
+   log shows no error.
+5. Confirm the variants array gained one new entry (the recovered video).
+
+### 11.2 Persistent rejection surfaces a user-actionable error (PAID — 2 Veo calls)
+
+1. With the inspector open, set the **Visual Prompt** to a prompt that is
+   so clearly disallowed that even the rewrite cannot save it (a string
+   stuffed with multiple banned-category keywords).
+2. Click **Video** in the inspector header.
+3. **Expected:** the production log shows the friendly G12 message:
+   `Scene #N was rejected by Veo content policy even after an auto-rewrite
+   attempt — edit the visual prompt in the Deep Inspector and try again.`
+   The scene asset status is `error`.
+
+### 11.3 Non-policy errors bypass the rewrite path (FREE)
+
+1. Pull the network cable (or block `googleapis.com` in DevTools network
+   conditions) and click **Video**.
+2. **Expected:** the log shows the original transport error (timeout,
+   network unreachable) — not the G12 retry message. The wrapper does not
+   call the rewriter on non-policy failures, so this confirms the
+   `isVeoPolicyError` guard works.
