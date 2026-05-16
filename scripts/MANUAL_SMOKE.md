@@ -319,3 +319,35 @@ Verifies the pre-flight cost estimate intercepts the Manifest All click.
 ### 7.4 Pricing drift sanity (automated)
 
 Pricing constants in `constants.ts` (`MODEL_COSTS_USD`) are dated in their header comment. When Gemini publishes new rates, update the values and the date. The drift assertion in `scripts/smoke-helpers.test.mts` covers structural drift (missing or extra keys vs `MODEL_NAMES`) — value drift is by design and intentional, not gated.
+
+## 8. Per-phase regenerate + stale-audio indicator (audit slice A1+A2)
+
+Verifies that the SceneInspector header buttons let the user regenerate image, video, or audio in isolation — and that editing narration after audio has been generated visibly flags the audio as stale.
+
+### 8.1 Audio-only regenerate preserves visual assets (PAID — one TTS call)
+
+1. `npm run dev:all` and open a project with at least one fully-generated scene (image + video + audio).
+2. Click the scene to open **Deep Scene Inspector**.
+3. In the inspector header, locate the three regenerate buttons: **Image**, **Video**, **Audio**.
+4. Click **Audio**.
+5. **Expected:** the scene card flips to `generating_audio` status; image and video stay unchanged (no flicker, same thumbnail, same Veo URI in the variants list).
+6. After completion, the scene status returns to `complete`; the variants array length is unchanged (audio-only does not append a variant).
+
+### 8.2 Stale-audio indicator on narration edit (FREE — no API calls)
+
+1. Open a scene whose audio has been generated. In the inspector header, the **Audio** button is in the resting (gray) state — not pulsing.
+2. Switch to the **Vocal Staging** tab. Edit any narrator line's text.
+3. **Expected:** the **Audio** button immediately picks up a pulsing luna-gold border and a small gold dot — flagging that the synthesized audio no longer matches the on-screen narration.
+4. Revert the edit back to the original text. The indicator should disappear (button returns to resting state).
+5. With the indicator showing, click **Audio**. After TTS completes, the indicator clears.
+
+### 8.3 Video-only regenerate requires an existing image (FREE)
+
+1. On a scene that has never been generated, open the inspector. The **Video** button is disabled (tooltip: "Generate an image first…").
+2. Click **Image**. After image generation completes, the **Video** button becomes enabled.
+
+### 8.4 Image-only regenerate leaves video + audio intact (PAID — one image call)
+
+1. With a fully-generated scene, click **Image** in the inspector.
+2. **Expected:** image swaps in; video and audio remain the previous values. No new TTS or Veo call fires.
+3. The variants array gets one new entry (image was a visual change).

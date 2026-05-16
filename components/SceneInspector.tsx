@@ -1,13 +1,18 @@
 
 import React, { useState } from 'react';
-import { Scene, Character, TransitionType, CameraMotion, DialogueLine, ColorGrade, TextOverlay } from '../types';
+import { Scene, Character, TransitionType, CameraMotion, DialogueLine, ColorGrade, TextOverlay, GeneratedAssets } from '../types';
 import { optimizeVisualPrompt } from '../services/gemini';
+import { isAudioStale } from '../services/narrationHash';
+
+export type RegenPhases = { image?: boolean; video?: boolean; audio?: boolean };
 
 interface SceneInspectorProps {
     scene: Scene;
     characters: Character[];
     assetImage?: string;
+    currentAsset?: GeneratedAssets[string];
     onUpdate: (updatedScene: Scene) => void;
+    onRegenerate?: (phases: RegenPhases) => void;
     onClose: () => void;
 }
 
@@ -36,9 +41,20 @@ const TEXT_ANIMATIONS = [
     { label: 'Cinematic Zoom', value: 'zoom_in' }
 ];
 
-export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, characters, assetImage, onUpdate, onClose }) => {
+export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, characters, assetImage, currentAsset, onUpdate, onRegenerate, onClose }) => {
     const [activeTab, setActiveTab] = useState<'optics' | 'narrative' | 'audio' | 'grading' | 'motion_gfx'>('optics');
     const [isOptimizing, setIsOptimizing] = useState(false);
+
+    const hasImage = !!currentAsset?.imageUrl;
+    const hasVideo = !!currentAsset?.videoUrl;
+    const hasAudio = !!currentAsset?.audioUrl;
+    const audioStale = isAudioStale(scene.narratorLines, currentAsset?.narrationHash, hasAudio);
+    const isGenerating = currentAsset?.status === 'generating_image' || currentAsset?.status === 'generating_video' || currentAsset?.status === 'generating_audio';
+
+    const triggerRegen = (phases: RegenPhases) => {
+        if (!onRegenerate || isGenerating) return;
+        onRegenerate(phases);
+    };
 
     const updateField = (field: keyof Scene | string, value: any) => {
         onUpdate({ ...scene, [field]: value });
@@ -89,9 +105,43 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                             <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em]">ID: SEQUENCE_INF_{scene.id}</p>
                         </div>
                     </div>
-                    <button onClick={onClose} className="w-10 h-10 rounded-full hover:bg-white/5 flex items-center justify-center text-mystic-gray hover:text-white transition-colors">
-                        <i className="fa-solid fa-xmark text-lg"></i>
-                    </button>
+                    <div className="flex items-center gap-3">
+                        {onRegenerate && (
+                            <div className="flex items-center gap-2" role="group" aria-label="Per-phase regenerate">
+                                <button
+                                    onClick={() => triggerRegen({ image: true, video: false, audio: false })}
+                                    disabled={isGenerating}
+                                    title="Regenerate image only (reuses existing video and audio)"
+                                    className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 hover:border-luna-gold/60 hover:bg-luna-gold/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[10px] font-bold text-celestial-stone uppercase tracking-widest flex items-center gap-2"
+                                >
+                                    <i className="fa-solid fa-image"></i>
+                                    Image
+                                </button>
+                                <button
+                                    onClick={() => triggerRegen({ image: false, video: true, audio: false })}
+                                    disabled={isGenerating || !hasImage}
+                                    title={hasImage ? "Regenerate video only (reuses existing image and audio)" : "Generate an image first to enable video regeneration"}
+                                    className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 hover:border-luna-gold/60 hover:bg-luna-gold/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[10px] font-bold text-celestial-stone uppercase tracking-widest flex items-center gap-2"
+                                >
+                                    <i className="fa-solid fa-film"></i>
+                                    Video
+                                </button>
+                                <button
+                                    onClick={() => triggerRegen({ image: false, video: false, audio: true })}
+                                    disabled={isGenerating}
+                                    title={audioStale ? "Audio is out of sync with current narration — click to re-synthesize" : "Regenerate audio only (reuses existing image and video)"}
+                                    className={`px-3 py-2 rounded-lg border disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 ${audioStale ? 'bg-luna-gold/20 border-luna-gold text-luna-gold animate-pulse hover:bg-luna-gold/30' : 'bg-white/5 border-white/10 text-celestial-stone hover:border-luna-gold/60 hover:bg-luna-gold/10'}`}
+                                >
+                                    <i className="fa-solid fa-waveform-lines"></i>
+                                    Audio
+                                    {audioStale && <span className="w-1.5 h-1.5 rounded-full bg-luna-gold"></span>}
+                                </button>
+                            </div>
+                        )}
+                        <button onClick={onClose} className="w-10 h-10 rounded-full hover:bg-white/5 flex items-center justify-center text-mystic-gray hover:text-white transition-colors">
+                            <i className="fa-solid fa-xmark text-lg"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <div className="flex-1 flex overflow-hidden">

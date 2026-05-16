@@ -118,6 +118,9 @@ export interface GeneratedAssets {
     // endpoint rejects base64 data URIs).
     videoUri?: string;
     audioUrl?: string;
+    // Stable snapshot of the narratorLines that produced audioUrl. When the
+    // scene's narratorLines drift from this, the SceneInspector flags audio as stale.
+    narrationHash?: string;
     status: 'pending' | 'generating_image' | 'generating_video' | 'generating_audio' | 'validating' | 'complete' | 'error';
     variants: AssetHistoryItem[];
     error?: string;

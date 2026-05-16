@@ -9,7 +9,7 @@ interface SceneCardProps {
   characters?: Character[];
   index: number;
   totalScenes: number;
-  onGenerate: (sceneId: string, feedback?: string) => void;
+  onGenerate: (sceneId: string) => void;
   onExtend: (sceneId: string) => void;
   onUpdate: (sceneId: string, updatedScene: Scene) => void;
   onMove: (direction: 'prev' | 'next') => void;

@@ -48,6 +48,13 @@ import {
 import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
 import { saveAssets as saveAssetsToIDB, loadAssets as loadAssetsFromIDB, clearAssets as clearAssetsFromIDB, saveLog as saveLogToIDB, loadLog as loadLogFromIDB } from './services/assetStore';
 import { normalizeLutPreset } from './services/lutMigration';
+import { hashNarration } from './services/narrationHash';
+
+// Per-phase regeneration switches. Defaults to all three for the original
+// "full sequence" entry point; SceneInspector regenerate buttons pass a
+// subset so a narration edit doesn't force a fresh image + Veo call.
+export type GenPhases = { image: boolean; video: boolean; audio: boolean };
+const ALL_PHASES: GenPhases = { image: true, video: true, audio: true };
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v7';
 const ALL_PROJECTS_KEY = 'human_override_archives_v5';
@@ -545,77 +552,126 @@ const App: React.FC = () => {
     }
   };
 
-  const handleGenerateSceneAsset = async (sceneId: string, feedback?: string) => {
+  const handleGenerateSceneAsset = async (
+    sceneId: string,
+    options?: { feedback?: string; phases?: Partial<GenPhases> }
+  ) => {
     const scene = project.scenes.find(s => s.id === sceneId);
     if (!scene) return;
     if (inFlightScenesRef.current.has(sceneId)) {
       addLog(`Scene #${project.scenes.indexOf(scene) + 1} is already generating — duplicate request ignored.`, 'system');
       return;
     }
+    const phases: GenPhases = { ...ALL_PHASES, ...(options?.phases || {}) };
+    const feedback = options?.feedback;
+    const sceneIdx = project.scenes.indexOf(scene) + 1;
+
+    // Per-phase preconditions: video needs an image to animate from, audio needs lines.
+    const existingAsset = project.assets[sceneId];
+    if (!phases.image && phases.video && !existingAsset?.imageUrl) {
+      addLog(`Cannot regenerate video for Scene #${sceneIdx}: no source image yet — regenerate image first.`, 'error');
+      return;
+    }
+    if (phases.audio && (!scene.narratorLines || scene.narratorLines.length === 0)) {
+      addLog(`Cannot regenerate audio for Scene #${sceneIdx}: no narrator lines on the scene.`, 'error');
+      return;
+    }
+    if (!phases.image && !phases.video && !phases.audio) {
+      addLog(`No regenerate phases selected for Scene #${sceneIdx}.`, 'system');
+      return;
+    }
+
     inFlightScenesRef.current.add(sceneId);
 
+    // Initial status: pick the first phase that's enabled so the SceneCard spinner reflects reality.
+    const initialStatus = phases.image
+      ? 'generating_image'
+      : phases.video
+        ? 'generating_video'
+        : 'generating_audio';
     setProject(prev => ({
       ...prev,
       assets: {
         ...prev.assets,
         [sceneId]: {
           ...(prev.assets[sceneId] || { status: 'pending', variants: [] }),
-          status: 'generating_image'
+          status: initialStatus
         }
       }
     }));
 
     try {
-      // Auto-fill any missing character reference images for characters in this scene.
-      // Without this, generateSceneImage silently drops characters without refs and the
-      // scene loses identity persistence — the central failure mode this audit fixes.
-      const sceneCharsMissingRefs = project.characters.filter(c =>
-        scene.charactersInScene.includes(c.name) && !c.referenceImageBase64
-      );
+      // Character refs are only needed when we're (re)generating the image. Skip the
+      // ref pass entirely for video-only or audio-only regenerations so the user
+      // doesn't pay for image-gen they didn't ask for.
       let workingCharacters = project.characters;
-      if (sceneCharsMissingRefs.length > 0) {
-        addLog(`Generating missing reference image${sceneCharsMissingRefs.length === 1 ? '' : 's'} for Scene #${project.scenes.indexOf(scene) + 1}: ${sceneCharsMissingRefs.map(c => c.name).join(', ')}`, 'system');
-        const style = project.globalStyle || "Cinematic";
-        const refResults = await Promise.allSettled(sceneCharsMissingRefs.map((c, i) =>
-          generateCharacterImage(c, resolution, style, project.productionSeed + (project.characters.indexOf(c) + 1) * 7919)
-            .then(img => ({ id: c.id, img }))
-        ));
-        const refsById = new Map<string, string>();
-        refResults.forEach((r, i) => {
-          if (r.status === 'fulfilled') refsById.set(r.value.id, r.value.img);
-          else addLog(`Reference generation failed for "${sceneCharsMissingRefs[i].name}" — scene will proceed without identity lock.`, 'error');
-        });
-        if (refsById.size > 0) {
-          workingCharacters = project.characters.map(c =>
-            refsById.has(c.id) ? { ...c, referenceImageBase64: refsById.get(c.id)! } : c
-          );
-          setProject(prev => ({ ...prev, characters: workingCharacters }));
+      if (phases.image) {
+        const sceneCharsMissingRefs = project.characters.filter(c =>
+          scene.charactersInScene.includes(c.name) && !c.referenceImageBase64
+        );
+        if (sceneCharsMissingRefs.length > 0) {
+          addLog(`Generating missing reference image${sceneCharsMissingRefs.length === 1 ? '' : 's'} for Scene #${sceneIdx}: ${sceneCharsMissingRefs.map(c => c.name).join(', ')}`, 'system');
+          const style = project.globalStyle || "Cinematic";
+          const refResults = await Promise.allSettled(sceneCharsMissingRefs.map((c, i) =>
+            generateCharacterImage(c, resolution, style, project.productionSeed + (project.characters.indexOf(c) + 1) * 7919)
+              .then(img => ({ id: c.id, img }))
+          ));
+          const refsById = new Map<string, string>();
+          refResults.forEach((r, i) => {
+            if (r.status === 'fulfilled') refsById.set(r.value.id, r.value.img);
+            else addLog(`Reference generation failed for "${sceneCharsMissingRefs[i].name}" — scene will proceed without identity lock.`, 'error');
+          });
+          if (refsById.size > 0) {
+            workingCharacters = project.characters.map(c =>
+              refsById.has(c.id) ? { ...c, referenceImageBase64: refsById.get(c.id)! } : c
+            );
+            setProject(prev => ({ ...prev, characters: workingCharacters }));
+          }
         }
       }
 
-      const moodboardImg = project.modules.outline;
-      const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
-      const styleRef = moodboardImg || keyArtImg;
-
-      // Phase 1: Image — fatal if fails
-      const img = await generateSceneImage(scene, workingCharacters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
-      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: 'generating_video' } } }));
-
-      // Phase 2: Video — fatal if fails
-      const { videoUrl, videoUri } = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
-      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl, videoUri, status: 'generating_audio' } } }));
-
-      // Phase 3: Audio — non-fatal; visual assets are preserved if this fails
-      let audio: string | undefined;
-      try {
-        audio = await generateSceneAudio(scene.narratorLines, project.characters);
-      } catch (audioErr) {
-        const audioMsg = audioErr instanceof Error ? audioErr.message : 'TTS failed';
-        const sceneIdx = project.scenes.indexOf(scene) + 1;
-        addLog(`Audio synthesis failed for Scene #${sceneIdx}: ${audioMsg} — visual assets preserved.`, 'error');
+      // Phase 1: Image (or reuse existing)
+      let img: string | undefined = existingAsset?.imageUrl;
+      if (phases.image) {
+        const moodboardImg = project.modules.outline;
+        const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
+        const styleRef = moodboardImg || keyArtImg;
+        img = await generateSceneImage(scene, workingCharacters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
+        const nextStatus = phases.video ? 'generating_video' : (phases.audio ? 'generating_audio' : 'complete');
+        setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: nextStatus } } }));
       }
 
-      const finalVariant: AssetHistoryItem = { imageUrl: img, videoUrl, timestamp: Date.now() };
+      // Phase 2: Video (or reuse existing)
+      let videoUrl: string | undefined = existingAsset?.videoUrl;
+      let videoUri: string | undefined = existingAsset?.videoUri;
+      if (phases.video) {
+        if (!img) throw new Error('Internal: video phase reached without an image');
+        const result = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
+        videoUrl = result.videoUrl;
+        videoUri = result.videoUri;
+        const nextStatus = phases.audio ? 'generating_audio' : 'complete';
+        setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl, videoUri, status: nextStatus } } }));
+      }
+
+      // Phase 3: Audio — non-fatal; visual assets are preserved if this fails
+      let audio: string | undefined = existingAsset?.audioUrl;
+      let narrationHash: string | undefined = existingAsset?.narrationHash;
+      if (phases.audio) {
+        try {
+          audio = await generateSceneAudio(scene.narratorLines, project.characters);
+          narrationHash = hashNarration(scene.narratorLines);
+        } catch (audioErr) {
+          const audioMsg = audioErr instanceof Error ? audioErr.message : 'TTS failed';
+          addLog(`Audio synthesis failed for Scene #${sceneIdx}: ${audioMsg} — visual assets preserved.`, 'error');
+        }
+      }
+
+      // Only append a variant if image or video changed — audio-only regens don't
+      // count as a new visual variant.
+      const changedVisual = phases.image || phases.video;
+      const finalVariant: AssetHistoryItem | null = changedVisual
+        ? { imageUrl: img, videoUrl, timestamp: Date.now() }
+        : null;
 
       setProject(prev => {
         const currentAsset = prev.assets[sceneId];
@@ -629,15 +685,17 @@ const App: React.FC = () => {
               videoUrl,
               videoUri,
               audioUrl: audio,
+              narrationHash,
               status: 'complete',
-              variants: [finalVariant, ...(currentAsset?.variants || [])].slice(0, 5)
+              variants: finalVariant
+                ? [finalVariant, ...(currentAsset?.variants || [])].slice(0, 5)
+                : (currentAsset?.variants || [])
             }
           }
         };
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'generation failed';
-      const sceneIdx = project.scenes.findIndex(s => s.id === sceneId) + 1;
       addLog(`Sequence generation failed for Scene #${sceneIdx}: ${msg}`, "error");
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], status: 'error', error: msg } } }));
     } finally {
@@ -1305,7 +1363,15 @@ const App: React.FC = () => {
       )}
       {editingCharacter && <CharacterModal character={editingCharacter} onClose={() => setEditingCharacter(null)} onSave={handleCharacterSave} onRegenerateImage={async (id) => { const char = project.characters.find(c => c.id === id)!; const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed); handleCharacterSave({ ...char, referenceImageBase64: img }); }} />}
       {showAddCharacter && <AddCharacterModal onClose={() => setShowAddCharacter(false)} onCreate={handleAddCharacter} />}
-      {inspectingScene && <SceneInspector scene={inspectingScene} characters={project.characters} assetImage={project.assets[inspectingScene.id]?.imageUrl} onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))} onClose={() => setInspectingScene(null)} />}
+      {inspectingScene && <SceneInspector
+        scene={inspectingScene}
+        characters={project.characters}
+        assetImage={project.assets[inspectingScene.id]?.imageUrl}
+        currentAsset={project.assets[inspectingScene.id]}
+        onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))}
+        onRegenerate={phases => handleGenerateSceneAsset(inspectingScene.id, { phases })}
+        onClose={() => setInspectingScene(null)}
+      />}
       {showAssetLibrary && <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={() => setShowAssetLibrary(false)} onSelect={scrollToScene} />}
       {showMixer && <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={() => setShowMixer(false)} />}
       {showAuditor && <ContinuityAuditor project={project} onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => s.charactersInScene.includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))} onClose={() => setShowAuditor(false)} />}
