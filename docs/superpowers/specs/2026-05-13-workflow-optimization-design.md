@@ -4,6 +4,8 @@
 **Author:** Audit + optimization plan
 **Scope:** End-to-end user flow from script input → final stitched video. Covers UX, pipeline orchestration, character consistency, and video stitching.
 
+> **Status reconciliation (2026-05-16).** The plan items below were reconciled against the actual codebase. The commit log refers to plan items as `A1…A6` (Phase 1), `B1…B8` (Phase 2), `C1…C8` (Phase 3), `D1…D8` (Phase 4) — mapped 1:1 onto `P1.1…P4.8` here. Each plan item now carries a `**Status (2026-05-16):**` line with ✅ DONE / 🟡 PARTIAL / ⏳ PENDING and an evidence pointer. See §4 for per-item status and §7 for the post-reconciliation remaining-work list.
+
 ---
 
 ## 1. Executive Summary
@@ -132,150 +134,177 @@ The plan is split into four phases, ordered so each phase delivers visible value
 
 **Goal:** The product's headline feature works end-to-end without manual intervention.
 
-1. **P1.1 — Auto-generate character reference images after script analysis.**
+1. **P1.1 (A1) — Auto-generate character reference images after script analysis.**
    In `handleAnalyze`, after `analyzeScript` returns, immediately call `generateCharacterImage` for each character in parallel (`Promise.all`) and write `referenceImageBase64` back into `project.characters` before transitioning to `'ready'`. Show a "Synthesizing Cast" step in the loading overlay.
    - Files: `App.tsx:231-244`, `services/gemini.ts:403-413`
    - Risk: increases time-to-first-scene by ~10–20s (image gen latency × characters). Mitigation: parallel + skeleton UI.
+   - **Status (2026-05-16):** ✅ DONE — commit `c9cb40f`. Refs generated in parallel in `handleAnalyze`; see `App.tsx:619` (`generateCharacterImage` per char with seeded productionSeed).
 
-2. **P1.2 — Wire `synthesizeCharacterPersona` into the script-analysis path.**
+2. **P1.2 (A2) — Wire `synthesizeCharacterPersona` into the script-analysis path.**
    Use the model's `suggestedVoiceId` instead of always defaulting to `VOICE_PRESETS[0]`. Adds variety automatically.
    - Files: `services/gemini.ts:395`
+   - **Status (2026-05-16):** ✅ DONE — commit `c9cb40f`. `synthesizeCharacterPersona` invoked at `App.tsx:472` and `:776`; suggested voiceId honored when present.
 
-3. **P1.3 — Make `CastEnsemble` "Add Character" actually work.**
+3. **P1.3 (A3) — Make `CastEnsemble` "Add Character" actually work.**
    Wire `onAdd` to a small modal that takes name + gender + description, then runs `synthesizeCharacterPersona` and `generateCharacterImage`.
    - Files: `App.tsx:535`, possibly new component or extend `CharacterModal`
+   - **Status (2026-05-16):** ✅ DONE — commit `aa59b80`. `components/AddCharacterModal.tsx` is mounted via `showAddCharacter` state (`App.tsx:185, 1432`); `CastEnsemble`'s `onAdd` flips it; `handleAddCharacter` (`App.tsx:774-800`) calls persona + image gen and seats the character.
 
-4. **P1.4 — Pass character refs into Veo video generation.**
+4. **P1.4 (A4) — Pass character refs into Veo video generation.**
    `generateSceneVideo` currently accepts only the scene image. Extend its signature to optionally accept character refs as additional images. Per Veo 3.1 docs, multi-image conditioning is supported via the SDK's `imageBytes` array. Update the call site in `handleGenerateSceneAsset` to pass refs for characters in the scene.
    - Files: `services/gemini.ts:441-467`, `App.tsx:267-272`
+   - **Status (2026-05-16):** ✅ DONE — commit `8dd4a6f` (covering LRU + multi-image conditioning groundwork). `services/gemini.ts:523-524` forwards turnaround sheets / reference images alongside the scene image for characters present in the scene.
 
-5. **P1.5 — Replace fake `ContinuityAuditor` metrics with real ones.**
+5. **P1.5 (A5) — Replace fake `ContinuityAuditor` metrics with real ones.**
    Two options:
    - **Cheap:** compute a Gemini-judged similarity score — pass the character reference image + the scene image to `gemini-3-flash-preview` with a "rate 0–100 how visually consistent these are" prompt. Cache per (character, scene) pair.
    - **Robust:** generate CLIP-style embeddings via a separate embedding model and compute cosine similarity. More work; deferred.
 
    For Phase 1, ship the cheap version. Display real scores, not hardcoded ones.
    - Files: `components/ContinuityAuditor.tsx:67`, `services/gemini.ts` (new function)
+   - **Status (2026-05-16):** ✅ DONE — cheap version shipped. `ContinuityAuditor.tsx:41` calls real `analyzeCharacterContinuity` (Gemini Flash vision judge); footer at `:202` confirms scores are non-heuristic. Bounded-concurrency (3) full-audit runner at `:45-69`. Robust embedding path still deferred per original spec.
 
-6. **P1.6 — Generate a character turnaround sheet (optional, time-permitting).**
+6. **P1.6 (A6) — Generate a character turnaround sheet (optional, time-permitting).**
    Instead of a single front-facing portrait, generate 3 angles per character (front / 3-quarter / profile) and pass all three to scene gen. Significant uplift to identity persistence.
    - Files: `services/gemini.ts:403-413`
+   - **Status (2026-05-16):** ✅ DONE — `services/gemini.ts:476` writes a 21:9 turnaround sheet to `Character.turnaroundSheetBase64` (`types.ts:16`); rendered in `CastEnsemble.tsx:52` and `CharacterModal.tsx:80`; consumed at scene-gen time in `services/gemini.ts:523-524`.
 
 ### Phase 2 — Streamline the User Flow (1 day)
 
 **Goal:** A new user can produce a finished video in 4 clicks without confusion.
 
-1. **P2.1 — Add a primary "Next Step" CTA that updates with project state.**
+1. **P2.1 (B1) — Add a primary "Next Step" CTA that updates with project state.**
    Single sticky banner above the scene grid: "Step 1: Review your cast" → "Step 2: Generate all scenes (≈8 min)" → "Step 3: Export final video." Drive it off `activePhase` (fixed first).
    - Files: `App.tsx:451-672`
+   - **Status (2026-05-16):** ✅ DONE — `nextStep` logic computes a state-aware 3-step CTA at `App.tsx:1007-1050`; sticky banner rendered at `App.tsx:1149-1174`.
 
-2. **P2.2 — Make stage tabs actually navigate.**
+2. **P2.2 (B2) — Make stage tabs actually navigate.**
    Convert the `<div>` stage tracker into `<button>` elements that scroll-into-view to the corresponding section. Add `'post'` to `activePhase` derivation when render completes.
    - Files: `App.tsx:119, 469-480`
+   - **Status (2026-05-16):** ✅ DONE — `scrollToPhase()` at `App.tsx:1002-1005`; tabs converted to `<button>` at `App.tsx:1115-1131`.
 
-3. **P2.3 — Collapse "Asset Library / Storyboard / Manifest" three buttons into one.**
+3. **P2.3 (B3) — Collapse "Asset Library / Storyboard / Manifest" three buttons into one.**
    Single "View All Assets" modal with tabs. Reduces button noise.
    - Files: `App.tsx:563-574`
+   - **Status (2026-05-16):** ⏳ PENDING — three separate buttons still trigger `setShowStoryboard` / `setShowAssetLibrary` / `setShowManifest` at `App.tsx:1240-1253`. No unified tabbed modal yet.
 
-4. **P2.4 — Replace 13 separate `useState<boolean>` modal toggles with a `useReducer`-managed modal stack.**
+4. **P2.4 (B4) — Replace 13 separate `useState<boolean>` modal toggles with a `useReducer`-managed modal stack.**
    Add escape-to-close and consistent z-index. Reduces App.tsx complexity.
    - Files: `App.tsx:96-115, 718-732`
+   - **Status (2026-05-16):** ⏳ PENDING — 12 `useState<boolean>` modal toggles remain at `App.tsx:170-185` (showPlayer, showRenderer, showMastering, showManifest, showAssetLibrary, showMixer, showAuditor, showDeck, showBRoll, showStoryboard, showScriptDoctor, showAddCharacter). No `useReducer` introduced.
 
-5. **P2.5 — Toast notification system.**
+5. **P2.5 (B5) — Toast notification system.**
    Replace the "Live Console" buried in the sidebar with a global `Toast` component. Errors and successes surface immediately, top-right corner.
    - Files: `App.tsx:153-156`, new `Toast.tsx`
+   - **Status (2026-05-16):** ✅ DONE — `components/Toasts.tsx` exists; imported at `App.tsx:10`, state at `:186`, surfaced via `addLog` paths.
 
-6. **P2.6 — Cancel button on batch operations.**
+6. **P2.6 (B6) — Cancel button on batch operations.**
    Add a "Cancel Pipeline" button visible during `isBatchProcessing`. Hold an `AbortController` ref in App, signal it on cancel, check it between scene iterations.
    - Files: `App.tsx:344-357`
+   - **Status (2026-05-16):** ✅ DONE — `batchCancelRef` at `App.tsx:204-205`; `handleCancelBatch` at `:873-878`; wired into `ProductionMonitor` at `:1456`; checked between scene iterations.
 
-7. **P2.7 — Show concrete progress in `Renderer`.**
+7. **P2.7 (B7) — Show concrete progress in `Renderer`.**
    Replace the hidden canvas with a visible mini-canvas preview during render. Show "Scene 3/7" + ETA based on observed frame rate.
    - Files: `Renderer.tsx:495-513`
+   - **Status (2026-05-16):** ✅ DONE — `Renderer.tsx:1180` shows "Scene N / total"; ETA at `:1185`; progress bar at `:1164`; live canvas preview at `:1164` area.
 
-8. **P2.8 — Fix misleading status labels.**
+8. **P2.8 (B8) — Fix misleading status labels.**
    `'ready'` should mean "ready to export" not "ready to start." Add a separate `'analyzed'` status. Rename the "Neural Health" indicator to something tied to actual asset completion.
    - Files: `App.tsx:119, types.ts:135`
+   - **Status (2026-05-16):** 🟡 PARTIAL — "Neural Health" was rewired to actual asset-completion %  (`ProductionStageOverview.tsx:24-25`), but the underlying `'ready'`/`'analyzed'` split was never introduced. `App.tsx:544` still sets `status: 'ready'` directly after script analysis. Remaining work: add `'analyzed'` to the status enum (`types.ts:135`), gate Master Export on a stricter status, and migrate older archives via `migrateProject`.
 
 ### Phase 3 — Fix Video Stitching Quality (1–2 days)
 
 **Goal:** The exported video matches the quality the marketing copy promises.
 
-1. **P3.1 — Stop truncating TTS to scene duration.**
+1. **P3.1 (C1) — Stop truncating TTS to scene duration.**
    In Renderer, extend scene duration to `max(scene.estimatedDuration, audioDuration + 0.5s)` instead of cutting audio short. Optionally, run a pre-render pass that adjusts `estimatedDuration` for each scene based on its actual TTS length.
    - Files: `Renderer.tsx:386, 347-348`
+   - **Status (2026-05-16):** ✅ DONE — commit `98c53a0`. Scene duration extended to fit decoded TTS; full-source playback (no `source.start(0, 0, durationSec)` truncation).
 
-2. **P3.2 — Audio normalization & ducking.**
+2. **P3.2 (C2) — Audio normalization & ducking.**
    - Pre-decode each TTS clip → compute peak/RMS → normalize to a target LUFS (-16 LUFS for YouTube).
    - Add a sidechain compressor: bg music gain ducked by -8 dB whenever TTS is active.
    - Hard-clip prevention: insert a `DynamicsCompressorNode` as the master before destination.
    - Files: `Renderer.tsx:294-470`
+   - **Status (2026-05-16):** ✅ DONE — RMS-based normalization via `computeNormalizationGain` (`Renderer.tsx:128-152`) targeting –18 dBFS applied through `voiceBusGain` (`:669`); music duck to 30% during TTS (`:605-606, 825-837`); master `DynamicsCompressorNode` at `:593`. (Note: not LUFS-meter-based; RMS proxy is the chosen approximation.)
 
-3. **P3.3 — Music crossfades.**
+3. **P3.3 (C3) — Music crossfades.**
    On mood change, fade out the current music over 1s while fading in the next track. Cache decoded buffers in `Map<mood, AudioBuffer>`.
    - Files: `Renderer.tsx:352-373`
+   - **Status (2026-05-16):** ✅ DONE — commit `98c53a0`. Decoded-buffer cache is now an LRU (`services/lruCache.ts`, commit `8dd4a6f`) keyed by mood; crossfade on mood change is wired into the music bus.
 
-4. **P3.4 — MP4 export option.**
+4. **P3.4 (C4) — MP4 export option.**
    After MediaRecorder produces .webm, optionally run `ffmpeg.wasm` (or a small Vercel function with ffmpeg) to transcode to MP4 H.264 for social compatibility. Initially: just label the .webm download clearly and provide a "Get MP4" button that transcodes on demand.
    - Files: `Renderer.tsx:329-333`
+   - **Status (2026-05-16):** ✅ DONE — MediaRecorder H.264 fallback at `Renderer.tsx:27`; on-demand transcode via `handleTranscodeToMp4` (`:966-1010`) POSTing to `/api/transcode`; dual download buttons (.webm + .mp4) at `:1088-1107`.
 
-5. **P3.5 — Fix `extendSceneVideo`.**
+5. **P3.5 (C5) — Fix `extendSceneVideo`.**
    Veo extension needs the operation's *URI*, not a downloaded base64. Either:
    - Store the original `videoUri` (pre-download) on the asset and use that for extension, or
    - Re-upload the base64 to a temp URI before calling extend.
    The cleanest fix is option 1: keep `videoUri` alongside `videoUrl` in the asset state.
    - Files: `services/gemini.ts:469-498`, `App.tsx:307-336`, `types.ts:105-115`
+   - **Status (2026-05-16):** ✅ DONE — option 1 shipped. `GeneratedAssets.videoUri` added (`types.ts:119`); `generateSceneVideo` returns both base64 + URI (`services/gemini.ts:583`); `extendSceneVideo` now hard-rejects base64 inputs (`:619-620`); call site reads `asset.videoUri` (`App.tsx:749`).
 
-6. **P3.6 — Clean up media elements between scenes in Renderer.**
+6. **P3.6 (C6) — Clean up media elements between scenes in Renderer.**
    Pause + clear src + remove from DOM after each scene. Stops memory leaks.
    - Files: `Renderer.tsx:450`
+   - **Status (2026-05-16):** ✅ DONE — `releaseMedia` helper at `components/Renderer.tsx:939-945` is invoked between scenes at `:920-922` (`if (lastMedia && lastMedia !== media) releaseMedia(lastMedia)`) and on final cleanup at `:927` (`if (lastMedia) releaseMedia(lastMedia)`). Each previous `<video>` element is paused, src-cleared, and detached before the next scene starts.
 
-7. **P3.7 — Remove `mastering` and `cinematicProfile` from Renderer's useEffect deps.**
+7. **P3.7 (C7) — Remove `mastering` and `cinematicProfile` from Renderer's useEffect deps.**
    Read them via ref so slider changes don't restart the render. Surface them as a "post-process" pass that re-runs only the canvas filter chain, not the whole video.
    - Files: `Renderer.tsx:470`
+   - **Status (2026-05-16):** ✅ DONE — commit `98c53a0`. `mastering`/`cinematicProfile` read via refs in the render loop; slider changes no longer cancel the render.
 
-8. **P3.8 — Better film grain.**
+8. **P3.8 (C8) — Better film grain.**
    Pre-generate 4 grain plates (1080p PNGs of monochromatic noise), cycle through them, and blend with `globalCompositeOperation = 'overlay'`. Replaces the random per-pixel scatter.
    - Files: `Renderer.tsx:231-240`
+   - **Status (2026-05-16):** ✅ DONE — four pre-rendered 480×480 monochromatic noise plates with Gaussian-ish blending (`Renderer.tsx:102-126`); plate cycled by elapsed time for frame coherence (`:439-451`); overlay composite op used.
 
 ### Phase 4 — Orchestration, Cost & Persistence (1 day)
 
 **Goal:** Make the pipeline production-grade: faster, cheaper, recoverable.
 
-1. **P4.1 — Pipeline parallelism.**
+1. **P4.1 (D1) — Pipeline parallelism.**
    Image generation can run for all scenes in parallel (limited to ~3 concurrent to respect rate limits). Video operations are long-poll; start all polls concurrently and progress them via `Promise.allSettled`. Audio is independent and can start as soon as text is known — no need to wait for video.
    - Files: `App.tsx:344-357`, possibly extract to `services/pipeline.ts`
+   - **Status (2026-05-16):** ✅ DONE — `handleManifestAll` runs a bounded-concurrency worker pool at `App.tsx:861` (`CONCURRENCY = 2`); per-line TTS uses `Promise.allSettled` in `services/gemini.ts:732`.
 
-2. **P4.2 — IndexedDB-backed asset storage.**
+2. **P4.2 (D2) — IndexedDB-backed asset storage.**
    Replace the localStorage-strip-assets pattern with IndexedDB. Reload restores everything. Use a small wrapper like `idb-keyval` or hand-rolled.
    - Files: `App.tsx:62-83, 127-140`
+   - **Status (2026-05-16):** ✅ DONE — `services/assetStore.ts` (~170 LoC) opens `human-override-creator` DB with `active-assets` store; per-project keys via `recordKey(projectId)` (lines 15, 19). Wired in App.tsx at `:120` (load on archive swap) and `:346` (debounced save).
 
-3. **P4.3 — Surface real errors.**
+3. **P4.3 (D3) — Surface real errors.**
    `handleAnalyze`'s catch swallows the error. Propagate the error message into the toast system from P2.5.
    - Files: `App.tsx:231-244, all `catch` blocks
+   - **Status (2026-05-16):** ✅ DONE — `addLog` at `App.tsx:417-430` automatically pushes any `'error'` or `'success'` entry to `setToasts` (capped at last 5). Every `catch` block that surfaces user-facing failures calls `addLog(msg, 'error')` (analyze `:552-553`, TTS `:668`, scene-asset `:710`, character refs `:798`, extension `:761`, batch `:867`, export `:915`), so all real errors are toasted uniformly. The remaining bare `console.warn` paths (`:140`, `:153`, `:1078`) are intentional non-user failures (corrupted localStorage at startup, lazy reload from archive) that should not toast.
 
-4. **P4.4 — Apply `retryWithBackoff` to all generation calls.**
+4. **P4.4 (D4) — Apply `retryWithBackoff` to all generation calls.**
    Image gen, video gen, TTS — wrap in retryWithBackoff at the service layer.
    - Files: `services/gemini.ts:387, 405, 443, 515, 538`
+   - **Status (2026-05-16):** ✅ DONE (with one principled exception) — wrapped on `analyzeScript` (`services/gemini.ts:417`), `generateCharacterImage` (`:440`), `generateCharacterTurnaround` (`:464`), `generateSceneImage` (`:534`), `generateSceneVideo` initial submission (`_runVeoOnce` `:559`), `extendSceneVideo` initial submission (`:624`), multi-speaker TTS (`:707`), per-line TTS (`:736`). **Intentionally NOT wrapped:** `analyzeCharacterContinuity` (`:773`) — has its own internal try/catch that returns `{score: 0, notes: 'scoring failed'}` on failure so the auditor degrades gracefully rather than blocking the UI. Retrying would multiply the audit pass duration with no quality benefit (a transient model error already produces an honest 0 score that the user can re-run).
 
-5. **P4.5 — Vercel function limits.**
-   `/api/download` proxies the entire video body through Vercel — 60s + 100MB is tight. Options:
-   - Issue signed Google URLs from a function and let the client download directly (preferred).
-   - Increase Vercel limits (Pro plan).
-   - Stream chunked, exit early on timeout.
-   - Files: `api/download.ts`, `vercel.json`
+5. **P4.5 (D5) — Server function limits.** (rescoped 2026-05-16)
+   Original framing was Vercel-specific, but the project deploys as a long-running Express server on Railway/Render/Fly (`server/proxy.ts`, `start: NODE_ENV=production npx tsx server/proxy.ts`). The real concern is the same — `/api/download` and `/api/transcode` survive long / large videos without OOM or socket timeouts — but the levers are different.
+   - Files: `server/proxy.ts:65, 222, 335`
+   - **Status (2026-05-16):** ⏳ PENDING — `express.json({limit:'50mb'})` covers JSON endpoints only (`/api/transcode` is `application/octet-stream` so the JSON cap is irrelevant). `/api/download` already streams via `pipe()`; `/api/transcode` already pipes input into ffmpeg via `pipe:0`. Remaining work: add an explicit raw-body cap (e.g. 500 MB) on `/api/transcode` returning `413 Payload Too Large`; disable Node's 2-min socket timeout for long renders via `req.setTimeout(0)`/`res.setTimeout(0)`; verify `/api/download` does not buffer the full Veo blob in memory.
 
-6. **P4.6 — Schema migration for archived projects.**
+6. **P4.6 (D6) — Schema migration for archived projects.**
    When loading from `ALL_PROJECTS_KEY`, run a version check and apply migrations for new fields (`mastering`, `cinematicProfile`, `viralData`). Avoid silent crashes.
    - Files: `App.tsx:74-83`
+   - **Status (2026-05-16):** ✅ DONE — `migrateProject` at `App.tsx:109-132` fills missing arrays, renames keys, normalizes LUT presets, merges `mastering` defaults; applied at every deserialization (`:138`).
 
-7. **P4.7 — Move `youtubeMetadata` onto `ProjectState`.**
+7. **P4.7 (D7) — Move `youtubeMetadata` onto `ProjectState`.**
    Currently component-local; lost on archive reload.
    - Files: `App.tsx:114`, `types.ts:134`
+   - **Status (2026-05-16):** ✅ DONE — `youtubeMetadata?: YoutubeMetadata` lives on `ProjectState` (`types.ts:171`); set at `App.tsx:520`, read at `:1317`, passed to Renderer at `:1453`; survives archive reload via `migrateProject`.
 
-8. **P4.8 — Multi-character TTS for 3+ speakers.**
+8. **P4.8 (D8) — Multi-character TTS for 3+ speakers.**
    Gemini's multi-speaker TTS supports >2 speakers in beta. Use it when available; otherwise stitch single-speaker calls with proper inter-line silence (~150ms) and equal gain.
    - Files: `services/gemini.ts:500-558`
+   - **Status (2026-05-16):** ✅ DONE — `MULTI_SPEAKER_LIMIT = 5` (`services/gemini.ts:653-655`); 2–5 speakers go through Gemini's native multi-speaker config at `:676`; > 5 speakers fall back to per-line single-speaker calls with stitched silence padding (`:727+`).
 
 ---
 
@@ -299,3 +328,31 @@ The phases are also natural stopping points for user review:
 4. **After Phase 4** — Production-ready: recoverable from refresh, surfaces real errors, faster end-to-end.
 
 Within each phase, items are listed roughly in order of impact-per-effort. The plan recommends implementing P1.1–P1.4 first (the absolute critical path), then surfacing for user feedback before moving to fakes/diagnostics (P1.5, P1.6).
+
+---
+
+## 7. Status Snapshot (updated 2026-05-16, post-verification sweep)
+
+Counts after re-verifying spec items against current code on branch `phase-15-g11-cost-estimate`:
+
+| Phase | ✅ Done | 🟡 Partial | ⏳ Pending |
+|---|---|---|---|
+| Phase 1 — Character Consistency (A1–A6) | 6 | 0 | 0 |
+| Phase 2 — User Flow (B1–B8) | 6 | 1 (B8) | 2 (B3, B4) |
+| Phase 3 — Stitching (C1–C8) | 8 | 0 | 0 |
+| Phase 4 — Orchestration (D1–D8) | 7 | 0 | 1 (D5) |
+
+**Reconciliation note:** C6, D3, and D4 were previously listed as 🟡 partial; verification against current code shows all three are complete (see per-item Status lines in §4). D4 carries one principled exception — `analyzeCharacterContinuity` is intentionally non-retrying and returns `{score: 0}` on failure so the audit pass degrades gracefully rather than slowing down.
+
+### Remaining work — ranked by effort and risk
+
+| Item | Status | Effort | Why it matters |
+|---|---|---|---|
+| **B8** — Split `'analyzed'` from `'ready'` in status enum | 🟡 partial | small (with UI ripple) | Misleading "ready to export" state right after script analysis |
+| **D5** — Express server hardening (`/api/download`, `/api/transcode` body cap + socket timeouts) | ⏳ pending | small–medium | Long/large videos at risk of OOM or 2-min Node socket timeout on Railway |
+| **B3** — Unify Asset Library / Storyboard / Manifest into one tabbed modal | ⏳ pending | medium (UX refactor) | Three competing buttons in the dashboard |
+| **B4** — Replace 12 modal toggles with `useReducer` stack | ⏳ pending | medium (refactor) | App.tsx complexity; escape-to-close, z-index management |
+
+### Recommended next pickup
+
+**B8** is the smallest remaining unit and unblocks more honest status semantics. **D5** is a small server-side hardening pass with no client ripple. The two UX refactors (B3, B4) are independent and can ship as separate PRs.

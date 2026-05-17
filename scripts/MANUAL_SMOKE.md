@@ -8,10 +8,14 @@ Run after Phase 2/3 changes to confirm video output quality.
 npm test
 ```
 
-Runs three suites under `tsx` (also gated in CI):
-- `scripts/smoke-helpers.test.mts` — pure helpers (`pickMimeType` fallback order, `computeBitrate`, `sniffWavHeader`, `stripDataUriPrefix`, `parseJsonResponse`), real `normalizeLutPreset` from `services/lutMigration.ts`, `buildLutArg` against the canonical `LUT_PRESETS` import, plus a drift assertion guarding `server/proxy.ts`'s local `LUT_PRESETS` against `types.ts`, and the pure parsers from `verify-mp4.mjs`.
-- `scripts/lut-migration.test.mts` — 11 load-bearing assertions on the legacy LUT enum migration.
-- `scripts/verify-mp4-fixture.test.mts` — end-to-end coverage for `verify-mp4.mjs` by generating synthetic good/bad MP4s via `ffmpeg-static` and asserting the right PASS/FAIL outcomes.
+Runs the full Vitest suite (also gated in CI). Test files live in `/tests/`:
+- `tests/smoke-helpers.test.ts` — pure helpers (`pickMimeType` fallback order, `computeBitrate`, `sniffWavHeader`, `stripDataUriPrefix`, `parseJsonResponse`), real `normalizeLutPreset` from `services/lutMigration.ts`, `buildLutArg` against the canonical `LUT_PRESETS` import, plus a drift assertion guarding `server/proxy.ts`'s local `LUT_PRESETS` against `types.ts`, and the pure parsers from `verify-mp4.mjs`.
+- `tests/lut-migration.test.ts` — 11 load-bearing assertions on the legacy LUT enum migration.
+- `tests/cost-estimator.test.ts` — pure arithmetic for the G11 batch cost estimator.
+- `tests/narration-hash.test.ts` — stable hashing + stale-audio detector for the per-phase regen flow.
+- `tests/gemini.test.ts` — base64 round-trip + `optimizeVisualPrompt` with a mocked `@google/genai` SDK (asserts model selection, prompt shape, empty-response fallback, error propagation).
+- `tests/lruCache.test.ts` — bounded LRU used by the Renderer for audio buffers (eviction order, recency bumps, onEvict hook).
+- `tests/verify-mp4-fixture.test.ts` — end-to-end coverage for `verify-mp4.mjs` by generating synthetic good/bad MP4s via `ffmpeg-static` and asserting the right PASS/FAIL outcomes.
 
 ## 2. End-to-end render verification (manual)
 
@@ -293,3 +297,391 @@ Notes:
 ```
 
 Once all four boxes are checked, edit `docs/superpowers/specs/2026-05-14-youtube-quality-plan.md` lines 186-194 — replace each `- [ ]` with `- [x] <date>` so the project state reflects that Phase 14 has been formally verified.
+
+## 7. Phase 15 G11 — Batch Manifest cost confirm modal
+
+Verifies the pre-flight cost estimate intercepts the Manifest All click.
+
+### 7.1 Modal opens with non-zero estimate (FREE — no Gemini calls)
+
+1. `npm run dev:all` and open `http://localhost:3000`.
+2. Open or create a project with ≥1 pending scene.
+3. Click **"Initialize Batch Manifest"**.
+4. **Expected:** modal shows `N scenes pending`, a `$X.XX` figure, breakdown line (`N images · N videos · N TTS calls`), runtime estimate (`~Y min`), and Cancel + Continue buttons.
+5. Click **Cancel**. Modal closes, no log entry, no batch starts.
+6. Re-open the modal. Click on the dark area outside the card. Same outcome.
+
+### 7.2 Continue fires the batch (PAID — runs the real flow)
+
+1. With the modal open, click **Continue**.
+2. **Expected:** modal closes; the log shows `Batch Manifesting Sequence Initialized…`; scenes progress through the existing concurrency=2 pipeline.
+
+### 7.3 Zero pending scenes skips the modal
+
+1. With a project where every scene is already complete, the dashboard's call-to-action button changes to **"Initialize Master Export"** — no Manifest All button is shown. Clicking elsewhere does not open the cost modal.
+
+### 7.4 Pricing drift sanity (automated)
+
+Pricing constants in `constants.ts` (`MODEL_COSTS_USD`) are dated in their header comment. When Gemini publishes new rates, update the values and the date. The drift assertion in `scripts/smoke-helpers.test.mts` covers structural drift (missing or extra keys vs `MODEL_NAMES`) — value drift is by design and intentional, not gated.
+
+## 8. Per-phase regenerate + stale-audio indicator (audit slice A1+A2)
+
+Verifies that the SceneInspector header buttons let the user regenerate image, video, or audio in isolation — and that editing narration after audio has been generated visibly flags the audio as stale.
+
+### 8.1 Audio-only regenerate preserves visual assets (PAID — one TTS call)
+
+1. `npm run dev:all` and open a project with at least one fully-generated scene (image + video + audio).
+2. Click the scene to open **Deep Scene Inspector**.
+3. In the inspector header, locate the three regenerate buttons: **Image**, **Video**, **Audio**.
+4. Click **Audio**.
+5. **Expected:** the scene card flips to `generating_audio` status; image and video stay unchanged (no flicker, same thumbnail, same Veo URI in the variants list).
+6. After completion, the scene status returns to `complete`; the variants array length is unchanged (audio-only does not append a variant).
+
+### 8.2 Stale-audio indicator on narration edit (FREE — no API calls)
+
+1. Open a scene whose audio has been generated. In the inspector header, the **Audio** button is in the resting (gray) state — not pulsing.
+2. Switch to the **Vocal Staging** tab. Edit any narrator line's text.
+3. **Expected:** the **Audio** button immediately picks up a pulsing luna-gold border and a small gold dot — flagging that the synthesized audio no longer matches the on-screen narration.
+4. Revert the edit back to the original text. The indicator should disappear (button returns to resting state).
+5. With the indicator showing, click **Audio**. After TTS completes, the indicator clears.
+
+### 8.3 Video-only regenerate requires an existing image (FREE)
+
+1. On a scene that has never been generated, open the inspector. The **Video** button is disabled (tooltip: "Generate an image first…").
+2. Click **Image**. After image generation completes, the **Video** button becomes enabled.
+
+### 8.4 Image-only regenerate leaves video + audio intact (PAID — one image call)
+
+1. With a fully-generated scene, click **Image** in the inspector.
+2. **Expected:** image swaps in; video and audio remain the previous values. No new TTS or Veo call fires.
+3. The variants array gets one new entry (image was a visual change).
+
+## 9. UX wins — export project, per-scene cost, delete confirm (audit slice C1/C3/C7)
+
+### 9.1 Export Project as JSON round-trips through Import (FREE)
+
+1. `npm run dev:all` and open a project with at least one scene.
+2. In the Production Control header (next to the SaveIndicator), click the **download icon** (tooltip: "Export the current project…").
+3. **Expected:** browser downloads `<projectId>_<YYYY-MM-DD>.json`; the log shows `Project exported: … (X KB)`.
+4. Go back to the Projects view, click **Import**, and select the file you just exported.
+5. **Expected:** project loads with identical scenes, characters, settings, and generated assets. Variants and the narrationHash on each asset are preserved.
+
+### 9.2 Per-scene cost is visible on each regenerate button (FREE)
+
+1. Open any scene in the Deep Scene Inspector.
+2. **Expected:** the three header buttons each show a small dollar figure:
+   - **Image** — $0.04
+   - **Video** — $1.50 on FHD projects, $0.45 on HD projects
+   - **Audio** — $0.02
+3. Switch the project resolution between FHD and HD on the dashboard, then re-open the inspector.
+4. **Expected:** the Video figure updates to match the new resolution; Image and Audio do not change.
+
+### 9.3 Delete-scene confirm gate (FREE)
+
+1. On a scene with generated assets, click the **Take** button on the SceneCard to open the action menu.
+2. Click **Delete Scene** (the red trash entry below Clear Sequence).
+3. **Expected:** a confirmation modal opens — "Delete Scene #N?" — with Cancel and Delete buttons. The scene is still present in the timeline.
+4. Click **Cancel** (or the dark overlay outside the card). The modal closes; the scene is still present.
+5. Re-open the menu, click **Delete Scene**, then click the red **Delete Scene** button in the modal.
+6. **Expected:** the scene is removed from the timeline and a toast offering **Undo** appears. Click Undo and the scene reappears in its original position.
+
+### 9.4 Delete confirm copy reflects asset presence (FREE)
+
+1. With a never-generated scene, click Take → Delete Scene. The modal copy reads "The scene will be removed from the timeline."
+2. With a fully-generated scene, the modal copy reads "The scene and its generated image, video, and audio will be removed from the timeline."
+
+## 10. Bounded audio-buffer cache during render (audit slice A4)
+
+The Renderer keeps decoded music + ambient `AudioBuffer`s in a bounded LRU
+(`services/lruCache.ts`, capped at 8 music + 6 ambient entries) instead of
+unbounded `Map`s. This is the manual heap check that confirms long renders
+stay within budget.
+
+### 10.1 30-scene render stays under 1 GB heap (PAID — full render)
+
+1. Open a project with 30+ scenes spanning at least 3 different `musicMood`
+   values and at least 2 `ambientSfx` values.
+2. Open DevTools → Memory → take a baseline heap snapshot before clicking
+   **Initialize Master Export**.
+3. Run the export. Take another snapshot at the 50% mark and a final one
+   on completion.
+4. **Expected:** total JS heap stays under 1 GB throughout. The
+   `musicBufferCache` and `ambientBufferCache` retainers should be visible
+   in the snapshot and capped at MUSIC_CACHE_CAP / AMBIENT_CACHE_CAP entries
+   (8 / 6 respectively).
+
+### 10.2 LRU eviction is silent in the log (FREE)
+
+1. During an export, watch the production log for any error / warning lines.
+2. **Expected:** no `Ambient SFX failed` or `Music buffer failed` lines
+   triggered by eviction. Eviction is in-memory only and does not interact
+   with any active `AudioBufferSourceNode` (sources hold their own buffer
+   ref until they stop).
+
+## 11. Phase 15 G12 — Veo content-policy auto-retry
+
+Verifies that a Veo prompt rejection no longer dead-ends the user mid-batch.
+The wrapper around `generateSceneVideo` detects 400 + safety/policy keywords
+in the upstream error, asks Gemini to rewrite the visual prompt in safer
+terms, and runs Veo once more with the rewrite.
+
+### 11.1 Successful recovery from a known-blocked prompt (PAID — 2 Veo calls)
+
+1. `npm run dev:all` and open a project with one scene.
+2. In the Deep Scene Inspector, set the **Visual Prompt** to something Veo
+   reliably rejects (e.g. a sentence including "drawing a firearm" or
+   another known content-policy trip).
+3. Click **Video** (the per-phase regenerate button) on the inspector header.
+4. **Expected:** the DevTools console shows a single
+   `Veo content-policy retry: rewrote prompt → "…"` info line. The second
+   Veo call succeeds and a video appears on the scene card. The production
+   log shows no error.
+5. Confirm the variants array gained one new entry (the recovered video).
+
+### 11.2 Persistent rejection surfaces a user-actionable error (PAID — 2 Veo calls)
+
+1. With the inspector open, set the **Visual Prompt** to a prompt that is
+   so clearly disallowed that even the rewrite cannot save it (a string
+   stuffed with multiple banned-category keywords).
+2. Click **Video** in the inspector header.
+3. **Expected:** the production log shows the friendly G12 message:
+   `Scene #N was rejected by Veo content policy even after an auto-rewrite
+   attempt — edit the visual prompt in the Deep Inspector and try again.`
+   The scene asset status is `error`.
+
+### 11.3 Non-policy errors bypass the rewrite path (FREE)
+
+1. Pull the network cable (or block `googleapis.com` in DevTools network
+   conditions) and click **Video**.
+2. **Expected:** the log shows the original transport error (timeout,
+   network unreachable) — not the G12 retry message. The wrapper does not
+   call the rewriter on non-policy failures, so this confirms the
+   `isVeoPolicyError` guard works.
+
+## 12. Status enum split — `'analyzed'` vs `'ready'` (audit slice B8)
+
+Verifies that the post-analysis state is honestly labeled `'analyzed'` (no
+assets generated yet) and only promotes to `'ready'` once every scene has a
+complete asset bundle.
+
+### 12.1 Fresh analysis lands in `'analyzed'` (FREE)
+
+1. `npm run dev:all` and start a new project.
+2. Paste any 2-scene script and click **Initialize Pipeline**.
+3. When analysis finishes, open DevTools → Application → Local Storage and
+   inspect the active project record under `human-override-creation-tool-active-project`.
+4. **Expected:** `status === 'analyzed'`. The layout's processing chrome is
+   off (settled state), but no scene assets exist yet.
+
+### 12.2 Promotion to `'ready'` after full manifest (FREE)
+
+1. From the `'analyzed'` state above, click **Initialize Batch Manifest**
+   → **Continue** in the cost modal.
+2. Wait for every scene to reach `complete` status in the storyboard.
+3. **Expected:** the active project's `status` flips to `'ready'`. Re-open
+   DevTools storage to confirm. The Master Export entry point becomes the
+   primary CTA.
+
+### 12.3 Promotion is one-way (FREE)
+
+1. From the `'ready'` state in §12.2, delete one scene via the scene card.
+2. **Expected:** `status` stays `'ready'` (no demotion). `isAllComplete` is
+   false against the remaining scenes only when their bundle is partial;
+   the existing scenes are still complete so the badge correctly remains
+   `'ready'`. Deleting a partial scene mid-batch should not regress the
+   badge — this is intentional.
+
+## 13. Express server hardening — `/api/transcode` body cap (audit slice D5)
+
+Verifies the 500 MB raw-body cap and the long-render socket-timeout disable.
+
+### 13.1 Oversized upload returns 413 (FREE)
+
+1. Start the proxy: `npm run server`.
+2. From another terminal, stream a 600 MB random file to the transcode
+   endpoint:
+   ```
+   head -c 629145600 /dev/urandom \
+     | curl -s -X POST \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @- \
+            -w "%{http_code}\n" \
+            http://localhost:3001/api/transcode
+   ```
+3. **Expected:** HTTP `413` and a JSON body containing
+   `"error": "Payload too large"`. The proxy log shows
+   `Transcode upload aborted: payload exceeded 524288000 bytes`.
+
+### 13.2 Long render survives Node's default socket timeout (PAID — 1 transcode)
+
+1. Build a synthetic 10-minute WebM (e.g. concatenate a small clip 60×) so
+   the two-pass loudnorm pass takes > 2 min wall-clock.
+2. POST it to `/api/transcode` from a fresh client.
+3. **Expected:** the request completes (server returns the MP4) instead of
+   being killed by a Node-layer 2-min `ServerResponse` timeout. Confirm by
+   checking that no `socket hang up` / `ECONNRESET` shows in the client
+   output and the proxy log shows the ffmpeg pass-2 reaching `frame=...`
+   close to the source duration before exit.
+
+### 13.3 `/api/download` does not buffer large bodies (FREE)
+
+1. With the proxy running, watch its RSS via `top -p $(pgrep -f "tsx server/proxy.ts" | head -1)`.
+2. Issue a `/api/download` request for any real Veo URI returning at least
+   a 50 MB blob.
+3. **Expected:** RSS stays roughly flat (chunked `getReader()` writes
+   stream straight to the response). Memory should not spike by the full
+   download size — this is already in place via the streaming `pump()`
+   loop at `server/proxy.ts:243-253`, this smoke just confirms no
+   regression.
+
+## 14. Unified Asset Workspace modal (audit slice B3)
+
+Verifies that the three legacy buttons (Storyboard / Asset Registry /
+Production Manifest) now open one shared modal with a tab strip, and that
+each tab renders the same content as the standalone modals did.
+
+### 14.1 All three entry buttons open the same workspace (FREE)
+
+1. `npm run dev:all` and load any project with at least 2 scenes and one
+   asset complete.
+2. From the dashboard, click **Storyboard View**.
+3. **Expected:** the unified workspace opens to the Storyboard tab. The
+   tab strip shows three tabs (Asset Registry / Storyboard / Production
+   Manifest). The header reads "Production Storyboard."
+4. Click the **Asset Registry** tab in the strip.
+5. **Expected:** the body swaps to the asset grid (same content as the
+   legacy AssetLibrary modal). Header updates to "Asset Registry."
+6. Click the **Production Manifest** tab.
+7. **Expected:** the body shows the stats panel + integrity audit (same
+   content as the legacy ProductionManifest modal). Header updates.
+
+### 14.2 Dismiss closes from any tab (FREE)
+
+1. From any tab, click **Dismiss Workspace** in the footer (or **X** in the
+   header).
+2. **Expected:** the workspace unmounts; dashboard scroll position
+   restored.
+3. Press **Escape** while the workspace is open.
+4. **Expected:** same — workspace unmounts.
+
+### 14.3 Selecting a scene from Storyboard or Library scrolls and closes (FREE)
+
+1. Open Storyboard tab, click any scene thumbnail.
+2. **Expected:** the workspace closes and the dashboard scrolls to that
+   scene card (existing `scrollToScene` behaviour).
+3. Repeat on the Asset Registry tab — same result.
+
+## 15. Modal stack — Escape closes top-first (audit slice B4)
+
+Verifies that the 9 boolean modal flags (Player / Renderer / Mastering /
+Mixer / Auditor / Deck / B-Roll / ScriptDoctor / AddCharacter) now share
+one stack, with z-index following stack order and Escape closing the
+topmost modal one keypress at a time.
+
+### 15.1 Stack-managed modals open and close correctly (FREE)
+
+1. `npm run dev:all`, load any project.
+2. Click **Cast Sync Audit** (opens ContinuityAuditor).
+3. **Expected:** the auditor mounts; the dashboard underneath is dimmed.
+4. Close it via its X button.
+5. **Expected:** auditor unmounts; dashboard is interactive again.
+6. Repeat for the other stack modals: Player, Renderer, Mastering (VFX
+   Master), Mixer (Audio), Director Deck, Script Doctor, Add Character.
+   Each should open/close cleanly through its own affordance.
+
+### 15.2 Nested modals: Escape pops top-first (FREE)
+
+1. Open the **Director Deck**, then from inside it open the **Script
+   Doctor** (or any second modal trigger reachable while a first modal is
+   open). Both should be mounted.
+2. Press **Escape**.
+3. **Expected:** only the most-recently-opened modal (Script Doctor)
+   closes; Director Deck stays mounted. This is the new LIFO semantic.
+4. Press **Escape** again.
+5. **Expected:** Director Deck closes.
+6. Press **Escape** a third time with the asset workspace or scene
+   inspector open.
+7. **Expected:** payload modals (asset workspace tab, inspecting scene,
+   editing character) clear in the same keystroke (fallback branch).
+
+### 15.3 Reopening an open modal bumps it to the top (FREE)
+
+1. Open Player.
+2. Without closing Player, open Mixer.
+3. Without closing either, click Player's open trigger again.
+4. Press **Escape**.
+5. **Expected:** Player closes first (it was just re-opened, so it's now
+   on top). Mixer remains. The reducer treats `open(alreadyOpenId)` as
+   "bring to top" so Escape semantics stay LIFO.
+
+## 16. Server-side compose render (audit slice G10)
+
+Verifies the `/api/render` pipeline: manifest validation, per-scene Veo
+download, ffmpeg concat + TTS audio overlay + LUT/vignette/grain pass,
+streamed MP4 download. The client-side renderer remains the default; the
+server path is the recommended option for projects that exceed the
+browser's MediaRecorder reliability ceiling (~5 min / 30 scenes).
+
+**Pre-flight requirements:**
+- `GEMINI_API_KEY` set in the proxy env (else 503 from `/api/render`).
+- `ffmpeg-static` installed (it is by default via `package.json`).
+- At least one scene with a populated `asset.videoUri` (regenerate any
+  scenes lacking it — pre-G5 archives need the regenerate step).
+
+### 16.1 Happy path — short project renders end-to-end (PAID — 0 Veo, server CPU)
+
+1. `npm run dev:all` and open a project where every scene has a complete
+   asset bundle (img + Veo video + TTS audio).
+2. On the dashboard, locate the new **Server Render (MP4)** button next
+   to **Initialize Master Export**.
+3. Click it.
+4. **Expected:**
+   - Toast: "Server render initiated — uploading manifest and waiting
+     for ffmpeg compose."
+   - The button label cycles `Validating manifest…` → `Rendering on server…`.
+   - The proxy log shows one `scene_NNNN.mp4` download per scene followed
+     by an `ffmpeg` invocation.
+   - When ffmpeg exits cleanly, the browser auto-downloads
+     `<projectId>.mp4`.
+   - Toast: "Server render complete — N.N MB MP4 downloaded."
+5. Open the MP4 in QuickTime / VLC / Chrome `<video>`:
+   - Plays without seeking glitches (faststart works).
+   - Total duration ≈ sum of scene `estimatedDuration` values.
+   - TTS audio plays at the right scene offsets.
+   - If the project's mastering had a LUT preset selected, the color
+     grade is visibly applied.
+
+### 16.2 Invalid manifest — missing `videoUri` blocks the render (FREE)
+
+1. With a project where at least one scene is missing the Veo URI
+   (e.g. one fresh scene whose Veo regenerate hasn't finished yet),
+   click **Server Render (MP4)**.
+2. **Expected:** the button flashes red ("Render failed"), and the
+   toast reads `Server render rejected: N scene(s) are missing a Veo
+   videoUri — regenerate them before server-rendering: #1, #3` (or
+   similar). No network request is sent. The button returns to idle
+   after ~4s.
+
+### 16.3 503 path — server unconfigured (FREE)
+
+1. Stop the proxy. From the dashboard, click **Server Render (MP4)**.
+2. **Expected:** the toast reads `Server render failed: Failed to fetch`
+   or `Server render failed: HTTP 503` (depending on how the proxy
+   exits). The button returns to idle after ~6s.
+
+### 16.4 Audio-free project (FREE)
+
+1. Build a tiny project with one scene that has a Veo video but no TTS
+   (e.g. clear the audio asset manually in DevTools or use a scene with
+   no `narratorLines`).
+2. Click **Server Render (MP4)**.
+3. **Expected:** the MP4 downloads cleanly with no audio track
+   (`-an` codepath). Both QuickTime and VLC play it without errors.
+
+**Known limitations (deferred to follow-up slices):**
+- No xfade transitions between scenes — clips concat with cuts.
+- No music or ambient SFX mixing on the server side.
+- No SSE progress reporting — the button just shows "Rendering on
+  server…" until ffmpeg exits. Long renders (multi-minute) appear stuck
+  in the UI even when the server is making forward progress; check the
+  proxy log to confirm.

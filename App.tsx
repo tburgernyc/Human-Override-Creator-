@@ -8,22 +8,25 @@ import { Renderer } from './components/Renderer';
 import { CharacterModal } from './components/CharacterModal';
 import { AddCharacterModal } from './components/AddCharacterModal';
 import { Toasts, type ToastItem } from './components/Toasts';
+import { ServerRenderButton } from './components/ServerRenderButton';
+import { useModalStack } from './hooks/useModalStack';
 import { LandingPage } from './components/LandingPage';
 import { ProjectsView } from './components/ProjectsView';
 import { SceneInspector } from './components/SceneInspector';
-import { ProductionManifest } from './components/ProductionManifest';
+import { AssetWorkspaceModal, AssetWorkspaceTab } from './components/AssetWorkspaceModal';
+import { BatchManifestConfirmModal } from './components/BatchManifestConfirmModal';
+import { DeleteSceneConfirmModal } from './components/DeleteSceneConfirmModal';
+import { estimateBatchCost, type BatchCostEstimate } from './services/costEstimator';
 import { ProductionTimeline } from './components/ProductionTimeline';
 import { CastEnsemble } from './components/CastEnsemble';
 import { DirectorAssistant } from './components/DirectorAssistant';
 import { YouTubeOptimizer } from './components/YouTubeOptimizer';
-import { AssetLibrary } from './components/AssetLibrary';
 import { ProductionMonitor } from './components/ProductionMonitor';
 import { AudioMixer } from './components/AudioMixer';
 import { ContinuityAuditor } from './components/ContinuityAuditor';
 import { DirectorialDeck } from './components/DirectorialDeck';
 import { BRollSuggestionModal } from './components/BRollSuggestionModal';
 import { DirectorDraftModal } from './components/DirectorDraftModal';
-import { StoryboardView } from './components/StoryboardView';
 import { ScriptDoctor } from './components/ScriptDoctor';
 import { VFXMaster } from './components/VFXMaster';
 import { Moodboard } from './components/Moodboard';
@@ -41,11 +44,19 @@ import {
   synthesizeCharacterPersona,
   performFullAudit,
   analyzeViralPotential,
-  extendSceneVideo
+  extendSceneVideo,
+  isVeoPolicyError
 } from './services/gemini';
 import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
 import { saveAssets as saveAssetsToIDB, loadAssets as loadAssetsFromIDB, clearAssets as clearAssetsFromIDB, saveLog as saveLogToIDB, loadLog as loadLogFromIDB } from './services/assetStore';
 import { normalizeLutPreset } from './services/lutMigration';
+import { hashNarration } from './services/narrationHash';
+
+// Per-phase regeneration switches. Defaults to all three for the original
+// "full sequence" entry point; SceneInspector regenerate buttons pass a
+// subset so a narration edit doesn't force a fresh image + Veo call.
+export type GenPhases = { image: boolean; video: boolean; audio: boolean };
+const ALL_PHASES: GenPhases = { image: true, video: true, audio: true };
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v7';
 const ALL_PROJECTS_KEY = 'human_override_archives_v5';
@@ -156,20 +167,22 @@ const App: React.FC = () => {
 
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.LANDSCAPE);
   const [resolution, setResolution] = useState<Resolution>(Resolution.FHD);
-  const [showPlayer, setShowPlayer] = useState(false);
-  const [showRenderer, setShowRenderer] = useState(false);
-  const [showMastering, setShowMastering] = useState(false);
-  const [showManifest, setShowManifest] = useState(false);
-  const [showAssetLibrary, setShowAssetLibrary] = useState(false);
-  const [showMixer, setShowMixer] = useState(false);
-  const [showAuditor, setShowAuditor] = useState(false);
-  const [showDeck, setShowDeck] = useState(false);
-  const [showBRoll, setShowBRoll] = useState(false);
-  const [showStoryboard, setShowStoryboard] = useState(false);
-  const [showScriptDoctor, setShowScriptDoctor] = useState(false);
+  // B4 (audit slice): boolean-only modal flags collapsed into a single
+  // stack. Each entry tracks open/closed AND order, so z-index follows the
+  // stack depth and Escape can close top-first when we want LIFO behaviour.
+  // See hooks/useModalStack.ts for the reducer.
+  const modals = useModalStack();
+  // B3 (audit slice): unified Asset/Storyboard/Manifest workspace. `null`
+  // means closed; setting a tab opens the workspace with that view active.
+  // Replaces the legacy showStoryboard / showAssetLibrary / showManifest
+  // booleans.
+  const [assetWorkspaceTab, setAssetWorkspaceTab] = useState<AssetWorkspaceTab | null>(null);
+  const [batchConfirm, setBatchConfirm] = useState<{ estimate: BatchCostEstimate; runtimeMin: number } | null>(null);
+  const [pendingDeleteSceneId, setPendingDeleteSceneId] = useState<string | null>(null);
+  // Payload-carrying modals — kept separate from the stack because each holds
+  // data the stack can't usefully model (selected scene, edited character).
   const [inspectingScene, setInspectingScene] = useState<Scene | null>(null);
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
-  const [showAddCharacter, setShowAddCharacter] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [bRollSuggestions, setBRollSuggestions] = useState<Scene[]>([]);
@@ -340,11 +353,23 @@ const App: React.FC = () => {
   }, [archives]);
 
   useEffect(() => {
-    if (project.status === 'ready' && !autoDiagnosisTriggered) {
+    // Auto-diagnosis (open assistant chat) fires once when analysis lands. After
+    // the B8 status split, that moment is `'analyzed'` — `'ready'` no longer
+    // means "just finished analyzing" and would never fire on first run.
+    if (project.status === 'analyzed' && !autoDiagnosisTriggered) {
       setChatOpen(true);
       setAutoDiagnosisTriggered(true);
     }
   }, [project.status, autoDiagnosisTriggered]);
+
+  // B8: promote 'analyzed' → 'ready' once every scene has a complete asset bundle.
+  // Demotion is intentionally one-way: deleting a scene mid-flight shouldn't
+  // surprise the user by reverting the badge.
+  useEffect(() => {
+    if (isAllComplete && project.status === 'analyzed') {
+      setProject(prev => ({ ...prev, status: 'ready' }));
+    }
+  }, [isAllComplete, project.status]);
 
   // Keyboard shortcuts (UX2): Esc closes any open modal, Cmd/Ctrl+K toggles
   // the assistant chat, ←/→ navigates between scenes when no text field is
@@ -355,20 +380,23 @@ const App: React.FC = () => {
       const isInput = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
       if (e.key === 'Escape') {
-        // Batch-close every modal-ish state. They're rendered as separate
-        // overlays so they don't strictly nest; firing all closes is safe.
-        setShowPlayer(false);
-        setShowRenderer(false);
-        setShowMastering(false);
-        setShowManifest(false);
-        setShowAssetLibrary(false);
-        setShowMixer(false);
-        setShowAuditor(false);
-        setShowDeck(false);
-        setShowBRoll(false);
-        setShowStoryboard(false);
-        setShowScriptDoctor(false);
-        setShowAddCharacter(false);
+        // B4: prefer LIFO close — pop the topmost stack modal first so a
+        // user inside a nested view backs out one layer at a time. If
+        // nothing's on the stack, fall through to the payload modals
+        // (cost-confirm, delete-confirm) and finally the asset workspace.
+        if (modals.hasAny()) {
+          modals.closeTop();
+          return;
+        }
+        if (batchConfirm) {
+          setBatchConfirm(null);
+          return;
+        }
+        if (pendingDeleteSceneId) {
+          setPendingDeleteSceneId(null);
+          return;
+        }
+        setAssetWorkspaceTab(null);
         setInspectingScene(null);
         setEditingCharacter(null);
         return;
@@ -395,7 +423,18 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [project.scenes]);
+  }, [project.scenes, modals, batchConfirm, pendingDeleteSceneId, assetWorkspaceTab, inspectingScene, editingCharacter]);
+
+  // If the scene targeted by the delete-confirm modal disappears (e.g. an
+  // undo from another flow), clear the pending id instead of leaving a
+  // dangling modal. This used to live as a setState inside the IIFE that
+  // renders the modal — moved to an effect so React doesn't see a state
+  // update during render.
+  useEffect(() => {
+    if (pendingDeleteSceneId && !project.scenes.some(s => s.id === pendingDeleteSceneId)) {
+      setPendingDeleteSceneId(null);
+    }
+  }, [pendingDeleteSceneId, project.scenes]);
 
   // Bumped from 50 → 500 entries (R5). The log is now persisted to IDB so it
   // survives refreshes; capping at 500 keeps memory bounded for very long
@@ -486,7 +525,7 @@ const App: React.FC = () => {
     } else if (name === 'suggest_b_roll') {
       const suggestions = await suggestBRoll(project);
       setBRollSuggestions(suggestions.map(s => ({ ...s, id: crypto.randomUUID() })));
-      setShowBRoll(true);
+      modals.open('broll');
       return "B-Roll synthesis complete. Review suggestions in the terminal.";
     }
     return "Unknown tool.";
@@ -528,7 +567,7 @@ const App: React.FC = () => {
       );
 
       const missingCount = charsWithRefs.filter(c => !c.referenceImageBase64).length;
-      setProject(prev => ({ ...prev, status: 'ready', characters: charsWithRefs, currentStepMessage: '' }));
+      setProject(prev => ({ ...prev, status: 'analyzed', characters: charsWithRefs, currentStepMessage: '' }));
 
       if (missingCount > 0) {
         addLog(`Cast synthesis: ${characters.length - missingCount}/${characters.length} references locked. Missing refs will retry on first scene use.`, 'success');
@@ -542,77 +581,139 @@ const App: React.FC = () => {
     }
   };
 
-  const handleGenerateSceneAsset = async (sceneId: string, feedback?: string) => {
+  const handleGenerateSceneAsset = async (
+    sceneId: string,
+    options?: { feedback?: string; phases?: Partial<GenPhases> }
+  ) => {
     const scene = project.scenes.find(s => s.id === sceneId);
     if (!scene) return;
     if (inFlightScenesRef.current.has(sceneId)) {
       addLog(`Scene #${project.scenes.indexOf(scene) + 1} is already generating — duplicate request ignored.`, 'system');
       return;
     }
+    const phases: GenPhases = { ...ALL_PHASES, ...(options?.phases || {}) };
+    const feedback = options?.feedback;
+    const sceneIdx = project.scenes.indexOf(scene) + 1;
+
+    // Per-phase preconditions: video needs an image to animate from, audio needs lines.
+    const existingAsset = project.assets[sceneId];
+    if (!phases.image && phases.video && !existingAsset?.imageUrl) {
+      addLog(`Cannot regenerate video for Scene #${sceneIdx}: no source image yet — regenerate image first.`, 'error');
+      return;
+    }
+    if (phases.audio && (!scene.narratorLines || scene.narratorLines.length === 0)) {
+      addLog(`Cannot regenerate audio for Scene #${sceneIdx}: no narrator lines on the scene.`, 'error');
+      return;
+    }
+    if (!phases.image && !phases.video && !phases.audio) {
+      addLog(`No regenerate phases selected for Scene #${sceneIdx}.`, 'system');
+      return;
+    }
+
     inFlightScenesRef.current.add(sceneId);
 
+    // Initial status: pick the first phase that's enabled so the SceneCard spinner reflects reality.
+    const initialStatus = phases.image
+      ? 'generating_image'
+      : phases.video
+        ? 'generating_video'
+        : 'generating_audio';
     setProject(prev => ({
       ...prev,
       assets: {
         ...prev.assets,
         [sceneId]: {
           ...(prev.assets[sceneId] || { status: 'pending', variants: [] }),
-          status: 'generating_image'
+          status: initialStatus
         }
       }
     }));
 
     try {
-      // Auto-fill any missing character reference images for characters in this scene.
-      // Without this, generateSceneImage silently drops characters without refs and the
-      // scene loses identity persistence — the central failure mode this audit fixes.
-      const sceneCharsMissingRefs = project.characters.filter(c =>
-        scene.charactersInScene.includes(c.name) && !c.referenceImageBase64
-      );
+      // Character refs are only needed when we're (re)generating the image. Skip the
+      // ref pass entirely for video-only or audio-only regenerations so the user
+      // doesn't pay for image-gen they didn't ask for.
       let workingCharacters = project.characters;
-      if (sceneCharsMissingRefs.length > 0) {
-        addLog(`Generating missing reference image${sceneCharsMissingRefs.length === 1 ? '' : 's'} for Scene #${project.scenes.indexOf(scene) + 1}: ${sceneCharsMissingRefs.map(c => c.name).join(', ')}`, 'system');
-        const style = project.globalStyle || "Cinematic";
-        const refResults = await Promise.allSettled(sceneCharsMissingRefs.map((c, i) =>
-          generateCharacterImage(c, resolution, style, project.productionSeed + (project.characters.indexOf(c) + 1) * 7919)
-            .then(img => ({ id: c.id, img }))
-        ));
-        const refsById = new Map<string, string>();
-        refResults.forEach((r, i) => {
-          if (r.status === 'fulfilled') refsById.set(r.value.id, r.value.img);
-          else addLog(`Reference generation failed for "${sceneCharsMissingRefs[i].name}" — scene will proceed without identity lock.`, 'error');
-        });
-        if (refsById.size > 0) {
-          workingCharacters = project.characters.map(c =>
-            refsById.has(c.id) ? { ...c, referenceImageBase64: refsById.get(c.id)! } : c
-          );
-          setProject(prev => ({ ...prev, characters: workingCharacters }));
+      if (phases.image) {
+        const sceneCharsMissingRefs = project.characters.filter(c =>
+          scene.charactersInScene.includes(c.name) && !c.referenceImageBase64
+        );
+        if (sceneCharsMissingRefs.length > 0) {
+          addLog(`Generating missing reference image${sceneCharsMissingRefs.length === 1 ? '' : 's'} for Scene #${sceneIdx}: ${sceneCharsMissingRefs.map(c => c.name).join(', ')}`, 'system');
+          const style = project.globalStyle || "Cinematic";
+          const refResults = await Promise.allSettled(sceneCharsMissingRefs.map((c, i) =>
+            generateCharacterImage(c, resolution, style, project.productionSeed + (project.characters.indexOf(c) + 1) * 7919)
+              .then(img => ({ id: c.id, img }))
+          ));
+          const refsById = new Map<string, string>();
+          refResults.forEach((r, i) => {
+            if (r.status === 'fulfilled') refsById.set(r.value.id, r.value.img);
+            else addLog(`Reference generation failed for "${sceneCharsMissingRefs[i].name}" — scene will proceed without identity lock.`, 'error');
+          });
+          if (refsById.size > 0) {
+            workingCharacters = project.characters.map(c =>
+              refsById.has(c.id) ? { ...c, referenceImageBase64: refsById.get(c.id)! } : c
+            );
+            setProject(prev => ({ ...prev, characters: workingCharacters }));
+          }
         }
       }
 
-      const moodboardImg = project.modules.outline;
-      const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
-      const styleRef = moodboardImg || keyArtImg;
+      // A scene is only `'complete'` when all three asset URLs are present.
+      // Per-phase regenerates may run image-only or video-only on a fresh
+      // scene, in which case the remaining slots are still empty and the
+      // status should fall back to `'pending'` until they're filled.
+      const completeOrPending = (image?: string, video?: string, audio?: string): GeneratedAssets[string]['status'] =>
+        (image && video && audio) ? 'complete' : 'pending';
 
-      // Phase 1: Image — fatal if fails
-      const img = await generateSceneImage(scene, workingCharacters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
-      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: 'generating_video' } } }));
-
-      // Phase 2: Video — fatal if fails
-      const { videoUrl, videoUri } = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
-      setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl, videoUri, status: 'generating_audio' } } }));
-
-      // Phase 3: Audio — non-fatal; visual assets are preserved if this fails
-      let audio: string | undefined;
-      try {
-        audio = await generateSceneAudio(scene.narratorLines, project.characters);
-      } catch (audioErr) {
-        const audioMsg = audioErr instanceof Error ? audioErr.message : 'TTS failed';
-        const sceneIdx = project.scenes.indexOf(scene) + 1;
-        addLog(`Audio synthesis failed for Scene #${sceneIdx}: ${audioMsg} — visual assets preserved.`, 'error');
+      // Phase 1: Image (or reuse existing)
+      let img: string | undefined = existingAsset?.imageUrl;
+      if (phases.image) {
+        const moodboardImg = project.modules.outline;
+        const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
+        const styleRef = moodboardImg || keyArtImg;
+        img = await generateSceneImage(scene, workingCharacters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
+        const nextStatus = phases.video
+          ? 'generating_video'
+          : phases.audio
+            ? 'generating_audio'
+            : completeOrPending(img, existingAsset?.videoUrl, existingAsset?.audioUrl);
+        setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: nextStatus } } }));
       }
 
-      const finalVariant: AssetHistoryItem = { imageUrl: img, videoUrl, timestamp: Date.now() };
+      // Phase 2: Video (or reuse existing)
+      let videoUrl: string | undefined = existingAsset?.videoUrl;
+      let videoUri: string | undefined = existingAsset?.videoUri;
+      if (phases.video) {
+        if (!img) throw new Error('Internal: video phase reached without an image');
+        const result = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
+        videoUrl = result.videoUrl;
+        videoUri = result.videoUri;
+        const nextStatus = phases.audio
+          ? 'generating_audio'
+          : completeOrPending(img, videoUrl, existingAsset?.audioUrl);
+        setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl, videoUri, status: nextStatus } } }));
+      }
+
+      // Phase 3: Audio — non-fatal; visual assets are preserved if this fails
+      let audio: string | undefined = existingAsset?.audioUrl;
+      let narrationHash: string | undefined = existingAsset?.narrationHash;
+      if (phases.audio) {
+        try {
+          audio = await generateSceneAudio(scene.narratorLines, project.characters);
+          narrationHash = hashNarration(scene.narratorLines);
+        } catch (audioErr) {
+          const audioMsg = audioErr instanceof Error ? audioErr.message : 'TTS failed';
+          addLog(`Audio synthesis failed for Scene #${sceneIdx}: ${audioMsg} — visual assets preserved.`, 'error');
+        }
+      }
+
+      // Only append a variant if image or video changed — audio-only regens don't
+      // count as a new visual variant.
+      const changedVisual = phases.image || phases.video;
+      const finalVariant: AssetHistoryItem | null = changedVisual
+        ? { imageUrl: img, videoUrl, timestamp: Date.now() }
+        : null;
 
       setProject(prev => {
         const currentAsset = prev.assets[sceneId];
@@ -626,16 +727,25 @@ const App: React.FC = () => {
               videoUrl,
               videoUri,
               audioUrl: audio,
-              status: 'complete',
-              variants: [finalVariant, ...(currentAsset?.variants || [])].slice(0, 5)
+              narrationHash,
+              status: completeOrPending(img, videoUrl, audio),
+              variants: finalVariant
+                ? [finalVariant, ...(currentAsset?.variants || [])].slice(0, 5)
+                : (currentAsset?.variants || [])
             }
           }
         };
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'generation failed';
-      const sceneIdx = project.scenes.findIndex(s => s.id === sceneId) + 1;
-      addLog(`Sequence generation failed for Scene #${sceneIdx}: ${msg}`, "error");
+      // G12: when the failure is content-policy and both Veo attempts failed
+      // (the auto-rewrite retry inside generateSceneVideo also threw), tell
+      // the user to edit the visual prompt rather than just leaving them
+      // staring at a raw API error message.
+      const userMsg = isVeoPolicyError(error)
+        ? `Scene #${sceneIdx} was rejected by Veo content policy even after an auto-rewrite attempt — edit the visual prompt in the Deep Inspector and try again.`
+        : `Sequence generation failed for Scene #${sceneIdx}: ${msg}`;
+      addLog(userMsg, "error");
       setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], status: 'error', error: msg } } }));
     } finally {
       inFlightScenesRef.current.delete(sceneId);
@@ -728,6 +838,23 @@ const App: React.FC = () => {
     }
   };
 
+  const openBatchConfirm = () => {
+    if (isBatchProcessing) return;
+    // Re-compute pending with the same filter handleManifestAll uses. If empty,
+    // skip the modal and just log — matches the existing no-op behavior inside
+    // handleManifestAll.
+    const pending = project.scenes.filter(
+      scene => project.assets[scene.id]?.status !== 'complete',
+    );
+    if (pending.length === 0) {
+      addLog('All scenes already complete — nothing to manifest.', 'system');
+      return;
+    }
+    const estimate = estimateBatchCost(pending, resolution);
+    const runtimeMin = Math.max(1, Math.ceil(pending.length * 1.5));
+    setBatchConfirm({ estimate, runtimeMin });
+  };
+
   const handleManifestAll = async () => {
     if (isBatchProcessing) return;
     batchCancelRef.current.cancelled = false;
@@ -797,8 +924,35 @@ const App: React.FC = () => {
       scenes: [...p.scenes, ...newScenes],
       assets: initializedAssets
     }));
-    setShowBRoll(false);
+    modals.close('broll');
     addLog(`${newScenes.length} B-Roll scenes injected.`, "success");
+  };
+
+  // Audit slice C1 — symmetric to the existing import (fileInputRef onChange).
+  // Serializes the full ProjectState — including base64 asset blobs — so a
+  // re-import round-trips losslessly. Large projects (heavy video assets)
+  // will produce a large file; the smoke doc warns about this.
+  const handleExportProject = () => {
+    try {
+      const json = JSON.stringify(project, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      // ProjectState has no human-facing title field — use the projectId (slugified)
+      // so re-imports keep a consistent filename signature.
+      const safeTitle = (project.projectId || 'project').replace(/[^a-z0-9_\-]+/gi, '_').slice(0, 60) || 'project';
+      const stamp = new Date().toISOString().slice(0, 10);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeTitle}_${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addLog(`Project exported: ${a.download} (${(blob.size / 1024).toFixed(1)} KB)`, 'success');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'unknown failure';
+      addLog(`Project export failed: ${msg}`, 'error');
+    }
   };
 
   // Scene delete with undo (UX7). Snapshots the scene + its asset + its
@@ -915,7 +1069,7 @@ const App: React.FC = () => {
         step: 2,
         title: 'Generate all scenes',
         desc: `${totalSceneCount} scene${totalSceneCount === 1 ? '' : 's'} ready to manifest. Estimated runtime: ~${Math.max(1, Math.ceil(totalSceneCount * 1.5))} min.`,
-        action: { label: 'Initialize Batch Manifest', onClick: handleManifestAll },
+        action: { label: 'Initialize Batch Manifest', onClick: openBatchConfirm },
       };
     }
     if (pending > 0) {
@@ -923,14 +1077,14 @@ const App: React.FC = () => {
         step: 2,
         title: `Finish remaining ${pending} scene${pending === 1 ? '' : 's'}`,
         desc: `${completeSceneCount}/${totalSceneCount} complete. Resume the batch to fill in the rest.`,
-        action: { label: 'Continue Batch Manifest', onClick: handleManifestAll },
+        action: { label: 'Continue Batch Manifest', onClick: openBatchConfirm },
       };
     }
     return {
       step: 3,
       title: 'Export your final video',
       desc: 'All scenes complete. Compile the master production unit.',
-      action: { label: 'Initialize Master Export', onClick: () => setShowRenderer(true) },
+      action: { label: 'Initialize Master Export', onClick: () => modals.open('renderer') },
     };
   })();
 
@@ -938,7 +1092,7 @@ const App: React.FC = () => {
     <Layout
       activeView={view}
       onViewChange={setView}
-      isProcessing={isBatchProcessing || (project.status !== 'ready' && project.status !== 'idle')}
+      isProcessing={isBatchProcessing || (project.status !== 'ready' && project.status !== 'analyzed' && project.status !== 'idle')}
       assistantActive={chatOpen}
       onToggleAssistant={() => setChatOpen(!chatOpen)}
     >
@@ -958,7 +1112,13 @@ const App: React.FC = () => {
             reader.onload = (ev) => {
               try {
                 const data = JSON.parse(ev.target!.result as string);
-                setProject(migrateProject(data));
+                // migrateProject hard-codes `assets: {}` because localStorage
+                // can't hold base64 blobs — but a user-supplied JSON file is
+                // the one path where we DO want to round-trip generated
+                // assets. Overlay them back after migration.
+                const migrated = migrateProject(data);
+                const importedAssets = data && typeof data.assets === 'object' && data.assets ? data.assets : {};
+                setProject({ ...migrated, assets: importedAssets });
                 setView('dashboard');
               } catch {
                 addLog('Project import failed: invalid JSON.', 'error');
@@ -985,6 +1145,14 @@ const App: React.FC = () => {
                     <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.4em] mt-1">Uplink: Core Intelligence Alpha</p>
                   </div>
                   <SaveIndicator state={saveState} />
+                  <button
+                    onClick={handleExportProject}
+                    title="Export the current project as a JSON file (round-trips through Import on the Projects screen)"
+                    aria-label="Export project as JSON"
+                    className="w-10 h-10 rounded-xl nm-button text-celestial-stone hover:text-luna-gold flex items-center justify-center transition-all hover:scale-105"
+                  >
+                    <i className="fa-solid fa-download text-xs"></i>
+                  </button>
                 </div>
 
                 <div className="flex bg-eclipse-black/40 p-1.5 rounded-2xl nm-inset-input border border-white/5 overflow-x-auto max-w-full scrollbar-hide">
@@ -1015,7 +1183,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   <div className="w-px h-10 bg-white/5 mx-2"></div>
-                  <button onClick={() => setShowDeck(true)} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg">
+                  <button onClick={() => modals.open('deck')} className="nm-button w-12 h-12 rounded-2xl flex items-center justify-center text-solar-amber hover:text-white transition-all shadow-lg">
                     <i className="fa-solid fa-chart-line"></i>
                   </button>
                 </div>
@@ -1088,7 +1256,7 @@ const App: React.FC = () => {
               <div className="space-y-10 animate-in slide-in-from-bottom-10 duration-1000">
                 <div id="phase-manifest" className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start scroll-mt-32">
                   <div className="lg:col-span-4 flex flex-col gap-6">
-                    <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={() => setShowAddCharacter(true)} onAudit={() => setShowAuditor(true)} />
+                    <CastEnsemble characters={project.characters} onEdit={setEditingCharacter} onAdd={() => modals.open('addCharacter')} onAudit={() => modals.open('auditor')} />
                     <div className="nm-panel p-8 border border-white/5 bg-black/40">
                       <h4 className="text-[10px] font-black text-white uppercase tracking-widest mb-6 flex items-center gap-3">
                         <i className="fa-solid fa-stethoscope text-luna-gold"></i> Directorial Audit
@@ -1103,7 +1271,7 @@ const App: React.FC = () => {
                           <i className="fa-solid fa-chevron-right text-[10px] text-luna-gold transition-transform group-hover:translate-x-1"></i>
                         </button>
                         <button
-                          onClick={() => setShowScriptDoctor(true)}
+                          onClick={() => modals.open('scriptDoctor')}
                           className="w-full nm-button p-4 rounded-2xl flex items-center justify-between group hover:border-solar-amber/30 transition-all border border-white/5"
                         >
                           <span className="text-[9px] font-black uppercase tracking-widest text-mystic-gray group-hover:text-white">Narrative Diagnostic</span>
@@ -1115,16 +1283,22 @@ const App: React.FC = () => {
                   <div className="lg:col-span-8 space-y-6">
                     <ProductionTimeline scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} />
 
+                    {/* B3 (audit slice): three legacy buttons (Storyboard /
+                        Asset Registry / Production Manifest) collapsed into
+                        one quick-pick row. Each opens the same unified
+                        AssetWorkspaceModal pre-targeted to the corresponding
+                        tab; the tab strip inside the modal handles further
+                        navigation without a round-trip to the dashboard. */}
                     <div className="flex flex-wrap sm:flex-nowrap gap-4">
-                      <button onClick={() => setShowStoryboard(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
+                      <button onClick={() => setAssetWorkspaceTab('storyboard')} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-luna-gold/20 transition-all group">
                         <i className="fa-solid fa-grip text-luna-gold text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Storyboard View</span>
                       </button>
-                      <button onClick={() => setShowAssetLibrary(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
+                      <button onClick={() => setAssetWorkspaceTab('library')} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-solar-amber/20 transition-all group">
                         <i className="fa-solid fa-photo-film text-solar-amber text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Asset Registry</span>
                       </button>
-                      <button onClick={() => setShowManifest(true)} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
+                      <button onClick={() => setAssetWorkspaceTab('manifest')} className="flex-1 min-w-[120px] py-6 nm-panel flex flex-col items-center justify-center gap-3 border border-white/5 hover:border-deep-sage/20 transition-all group">
                         <i className="fa-solid fa-file-invoice text-deep-sage text-xl group-hover:scale-110 transition-transform"></i>
                         <span className="text-[10px] font-black text-white uppercase tracking-widest">Production Protocol</span>
                       </button>
@@ -1140,10 +1314,10 @@ const App: React.FC = () => {
                       <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Manifesting visual and auditory temporal takes</p>
                     </div>
                     <div className="flex gap-4">
-                      <button onClick={handleManifestAll} disabled={isBatchProcessing} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
+                      <button onClick={openBatchConfirm} disabled={isBatchProcessing} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
                         <i className="fa-solid fa-bolt-lightning animate-pulse"></i> Initialize Batch Manifest
                       </button>
-                      <button onClick={() => setShowMixer(true)} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
+                      <button onClick={() => modals.open('mixer')} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
                         <i className="fa-solid fa-sliders"></i>
                       </button>
                     </div>
@@ -1158,7 +1332,7 @@ const App: React.FC = () => {
                           onExtend={handleExtendScene}
                           onUpdate={(id, s) => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === id ? s : sc) }))}
                           onMove={(dir) => handleMoveScene(scene.id, dir)}
-                          onDelete={(id) => handleDeleteScene(id)}
+                          onDelete={(id) => setPendingDeleteSceneId(id)}
                           onDuplicate={() => setProject(p => ({ ...p, scenes: [...p.scenes, { ...scene, id: crypto.randomUUID() }] }))}
                           onInspect={setInspectingScene}
                           onSelectVariant={handleSelectVariant}
@@ -1186,7 +1360,7 @@ const App: React.FC = () => {
                       <h3 className="text-3xl font-black text-white uppercase tracking-tighter font-mono italic">Post-Production & Release</h3>
                       <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Neural mastering and distribution multipliers</p>
                     </div>
-                    <button onClick={() => setShowMastering(true)} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
+                    <button onClick={() => modals.open('mastering')} className="px-8 py-3 nm-button text-luna-gold border border-luna-gold/20 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-luna-gold hover:text-white transition-all flex items-center gap-3">
                       <i className="fa-solid fa-wand-magic-sparkles"></i> Open VFX Synthesis Lab
                     </button>
                   </div>
@@ -1210,13 +1384,20 @@ const App: React.FC = () => {
 
                       <div className="flex flex-col sm:flex-row gap-6 w-full sm:w-auto">
                         <button
-                          onClick={() => setShowPlayer(true)}
+                          onClick={() => modals.open('player')}
                           className="px-12 py-5 nm-button text-starlight rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] hover:bg-white/5 transition-all flex items-center justify-center gap-4 border border-white/10"
                         >
                           <i className="fa-solid fa-desktop"></i> Pre-Production Review
                         </button>
+                        <ServerRenderButton
+                          project={project}
+                          aspectRatio={aspectRatio}
+                          resolution={resolution}
+                          disabled={!isAllComplete}
+                          onLog={(message, type) => addLog(message, type)}
+                        />
                         <button
-                          onClick={() => setShowRenderer(true)}
+                          onClick={() => modals.open('renderer')}
                           disabled={!isAllComplete}
                           className="px-16 py-5 bg-gold-gradient text-white rounded-2xl font-black uppercase tracking-[0.3em] text-[10px] shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-30 disabled:hover:scale-100"
                         >
@@ -1272,21 +1453,68 @@ const App: React.FC = () => {
       </aside>
 
       {/* MODALS */}
+      {batchConfirm && (
+        <BatchManifestConfirmModal
+          estimate={batchConfirm.estimate}
+          runtimeMin={batchConfirm.runtimeMin}
+          onCancel={() => setBatchConfirm(null)}
+          onContinue={() => {
+            setBatchConfirm(null);
+            handleManifestAll();
+          }}
+        />
+      )}
+      {pendingDeleteSceneId && (() => {
+        const idx = project.scenes.findIndex(s => s.id === pendingDeleteSceneId);
+        // Scene-vanished cleanup lives in a useEffect above; just bail
+        // visually here so this render pass doesn't show stale chrome.
+        if (idx < 0) return null;
+        const asset = project.assets[pendingDeleteSceneId];
+        const hasAssets = !!(asset?.imageUrl || asset?.videoUrl || asset?.audioUrl);
+        const idToDelete = pendingDeleteSceneId;
+        return (
+          <DeleteSceneConfirmModal
+            sceneNumber={idx + 1}
+            hasGeneratedAssets={hasAssets}
+            onCancel={() => setPendingDeleteSceneId(null)}
+            onConfirm={() => {
+              setPendingDeleteSceneId(null);
+              handleDeleteScene(idToDelete);
+            }}
+          />
+        );
+      })()}
       {editingCharacter && <CharacterModal character={editingCharacter} onClose={() => setEditingCharacter(null)} onSave={handleCharacterSave} onRegenerateImage={async (id) => { const char = project.characters.find(c => c.id === id)!; const img = await generateCharacterImage(char, resolution, project.globalStyle!, project.productionSeed); handleCharacterSave({ ...char, referenceImageBase64: img }); }} />}
-      {showAddCharacter && <AddCharacterModal onClose={() => setShowAddCharacter(false)} onCreate={handleAddCharacter} />}
-      {inspectingScene && <SceneInspector scene={inspectingScene} characters={project.characters} assetImage={project.assets[inspectingScene.id]?.imageUrl} onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))} onClose={() => setInspectingScene(null)} />}
-      {showAssetLibrary && <AssetLibrary assets={project.assets} scenes={project.scenes} onClose={() => setShowAssetLibrary(false)} onSelect={scrollToScene} />}
-      {showMixer && <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={() => setShowMixer(false)} />}
-      {showAuditor && <ContinuityAuditor project={project} onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => s.charactersInScene.includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))} onClose={() => setShowAuditor(false)} />}
-      {showDeck && <DirectorialDeck project={project} onClose={() => setShowDeck(false)} />}
-      {showBRoll && <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={() => setShowBRoll(false)} />}
-      {showStoryboard && <StoryboardView scenes={project.scenes} assets={project.assets} onSelectScene={scrollToScene} onClose={() => setShowStoryboard(false)} />}
-      {showScriptDoctor && <ScriptDoctor project={project} onClose={() => setShowScriptDoctor(false)} />}
-      {showMastering && <VFXMaster mastering={project.mastering} cinematicProfile={project.cinematicProfile} onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))} onClose={() => setShowMastering(false)} />}
+      {modals.isOpen('addCharacter') && <AddCharacterModal onClose={() => modals.close('addCharacter')} onCreate={handleAddCharacter} />}
+      {inspectingScene && <SceneInspector
+        scene={inspectingScene}
+        characters={project.characters}
+        assetImage={project.assets[inspectingScene.id]?.imageUrl}
+        currentAsset={project.assets[inspectingScene.id]}
+        resolution={resolution}
+        onUpdate={s => setProject(p => ({ ...p, scenes: p.scenes.map(sc => sc.id === s.id ? s : sc) }))}
+        onRegenerate={phases => handleGenerateSceneAsset(inspectingScene.id, { phases })}
+        onClose={() => setInspectingScene(null)}
+      />}
+      {assetWorkspaceTab && (
+        <AssetWorkspaceModal
+          project={project}
+          youtubeMetadata={project.youtubeMetadata}
+          activeTab={assetWorkspaceTab}
+          onTabChange={setAssetWorkspaceTab}
+          onSelectScene={scrollToScene}
+          onClose={() => setAssetWorkspaceTab(null)}
+        />
+      )}
+      {modals.isOpen('mixer') && <AudioMixer mastering={project.mastering} onUpdate={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onClose={() => modals.close('mixer')} />}
+      {modals.isOpen('auditor') && <ContinuityAuditor project={project} onSyncPrompts={(id, prompt) => setProject(p => ({ ...p, scenes: p.scenes.map(s => s.charactersInScene.includes(p.characters.find(c => c.id === id)!.name) ? { ...s, visualPrompt: `${s.visualPrompt}. (Reference: ${prompt})` } : s) }))} onClose={() => modals.close('auditor')} />}
+      {modals.isOpen('deck') && <DirectorialDeck project={project} onClose={() => modals.close('deck')} />}
+      {modals.isOpen('broll') && <BRollSuggestionModal suggestions={bRollSuggestions} onAccept={handleAddBRoll} onClose={() => modals.close('broll')} />}
+      {modals.isOpen('scriptDoctor') && <ScriptDoctor project={project} onClose={() => modals.close('scriptDoctor')} />}
+      {modals.isOpen('mastering') && <VFXMaster mastering={project.mastering} cinematicProfile={project.cinematicProfile} onUpdateMastering={u => setProject(p => ({ ...p, mastering: { ...p.mastering!, ...u } }))} onUpdateProfile={p => setProject(prev => ({ ...prev, cinematicProfile: p }))} onClose={() => modals.close('mastering')} />}
       {project.activeDraft && <DirectorDraftModal draft={project.activeDraft} scenes={project.scenes} onApply={handleApplyDraft} onDiscard={() => setProject(p => ({ ...p, activeDraft: null }))} />}
-      {showPlayer && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => setShowPlayer(false)} />}
-      {showRenderer && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} keyArtSceneId={project.keyArtSceneId} metadata={project.youtubeMetadata} onCancel={() => setShowRenderer(false)} onComplete={() => { }} onLog={addLog} />}
-      {showManifest && <ProductionManifest project={project} youtubeMetadata={project.youtubeMetadata ?? null} onClose={() => setShowManifest(false)} />}
+      {modals.isOpen('player') && <Player scenes={project.scenes} assets={project.assets} mastering={project.mastering} onClose={() => modals.close('player')} />}
+      {modals.isOpen('renderer') && <Renderer scenes={project.scenes} assets={project.assets} resolution={resolution} aspectRatio={aspectRatio} globalStyle={project.globalStyle || "Cinematic"} mastering={project.mastering} cinematicProfile={project.cinematicProfile} keyArtSceneId={project.keyArtSceneId} metadata={project.youtubeMetadata} onCancel={() => modals.close('renderer')} onComplete={() => { }} onLog={addLog} />}
 
       <ProductionMonitor isActive={isBatchProcessing} scenes={project.scenes} assets={project.assets} currentTask={currentTaskLabel} onCancel={handleCancelBatch} isCancelling={isCancellingBatch} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />

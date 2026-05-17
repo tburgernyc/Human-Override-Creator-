@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Scene, GeneratedAssets, Resolution, AspectRatio, TextOverlay, ProjectState, TransitionType, CameraMotion, ColorGrade, LogEntry, YoutubeMetadata } from '../types';
 import { decodeAudio } from '../services/gemini';
 import { pickMusicTrack, MusicMood } from '../constants';
+import { LruCache } from '../services/lruCache';
 
 // Free ambient SFX from Wikimedia Commons (no auth required)
 const AMBIENT_TRACKS: Record<string, string> = {
@@ -537,13 +538,16 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
         // Track audio buffer sources so we can stop them at scene boundaries
         // — otherwise long TTS bleeds into the next scene.
         const activeSources: AudioBufferSourceNode[] = [];
-        // Decoded music buffers cached by mood key so a mood that repeats does
-        // not re-download and re-decode the same track.
-        const musicBufferCache = new Map<string, AudioBuffer>();
-        // Ambient SFX cache mirrors music cache. The renderer used to define
-        // AMBIENT_TRACKS but never reference it (B1) — wiring the same crossfade
-        // bus pattern lets the per-scene ambientSfx field actually do something.
-        const ambientBufferCache = new Map<string, AudioBuffer>();
+        // Decoded music + ambient buffers cached by id/key. Bounded to avoid the
+        // unbounded growth audit slice A4 flagged: long projects with multiple
+        // mood pools used to pin 500 MB+ of decoded audio for the entire render.
+        // 8 entries is enough to keep adjacent-scene crossfades hot while letting
+        // older tracks drop out. Eviction is silent — the AudioBuffer GC's once
+        // any in-flight source completes (sources hold their own ref).
+        const MUSIC_CACHE_CAP = 8;
+        const AMBIENT_CACHE_CAP = 6;
+        const musicBufferCache = new LruCache<string, AudioBuffer>(MUSIC_CACHE_CAP);
+        const ambientBufferCache = new LruCache<string, AudioBuffer>(AMBIENT_CACHE_CAP);
         // Currently-playing music source plus its dedicated crossfade gain node
         // (per-track), letting two tracks overlap during a transition. The shared
         // bgMusicGain handles overall volume + sidechain ducking.

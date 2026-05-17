@@ -9,7 +9,7 @@ interface SceneCardProps {
   characters?: Character[];
   index: number;
   totalScenes: number;
-  onGenerate: (sceneId: string, feedback?: string) => void;
+  onGenerate: (sceneId: string) => void;
   onExtend: (sceneId: string) => void;
   onUpdate: (sceneId: string, updatedScene: Scene) => void;
   onMove: (direction: 'prev' | 'next') => void;
@@ -319,7 +319,8 @@ export const SceneCard: React.FC<SceneCardProps> = ({
                            )}
                            <button onClick={() => { onInspect?.(scene); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-bold text-starlight hover:bg-luna-gold hover:text-white transition-colors uppercase"><i className="fa-solid fa-microscope mr-3"></i> Deep Inspector</button>
                            <div className="h-px nm-inset-input mx-2 my-1"></div>
-                           <button onClick={() => { onClearAsset(scene.id, 'all'); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-medium text-mystic-gray hover:text-solar-amber transition-colors uppercase"><i className="fa-solid fa-trash-can mr-3"></i> Clear Sequence</button>
+                           <button onClick={() => { onClearAsset(scene.id, 'all'); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-medium text-mystic-gray hover:text-solar-amber transition-colors uppercase"><i className="fa-solid fa-eraser mr-3"></i> Clear Sequence</button>
+                           <button onClick={() => { onDelete(scene.id); setShowTakeMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] font-medium text-mystic-gray hover:text-red-400 transition-colors uppercase"><i className="fa-solid fa-trash-can mr-3"></i> Delete Scene</button>
                        </div>
                      )}
                  </div>

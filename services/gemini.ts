@@ -2,6 +2,11 @@
 import { GoogleGenAI, Type, Modality, HarmCategory, HarmBlockThreshold, GenerateContentResponse, FunctionDeclaration, LiveServerMessage } from "@google/genai";
 import { MODEL_NAMES, VOICE_PRESETS, VoicePreset, MUSIC_TRACKS } from "../constants";
 import { Character, Scene, DialogueLine, AspectRatio, Resolution, ProjectState, ProductionTask, ProjectModules, ViralPotential, DirectorDraft } from "../types";
+import { isVeoPolicyError, buildRewriteInstruction, withPolicyRetry } from "./veoPolicyRetry";
+
+// Phase 15 G12 — re-export the detector so callers (App.tsx) can identify the
+// final error as a policy issue and customize the user-facing log line.
+export { isVeoPolicyError } from "./veoPolicyRetry";
 
 const cleanJsonResponse = (text: string): string => {
   let clean = text.trim();
@@ -543,7 +548,9 @@ export interface SceneVideoResult {
   videoUri: string;
 }
 
-export const generateSceneVideo = async (imageBase64: string, prompt: string, aspectRatio: AspectRatio, resolution: Resolution, style: string = "Cinematic"): Promise<SceneVideoResult> => {
+// Inner: a single Veo submit→poll→download attempt. The exported
+// generateSceneVideo wraps this with the G12 content-policy retry.
+const _runVeoOnce = async (imageBase64: string, prompt: string, aspectRatio: AspectRatio, resolution: Resolution, style: string): Promise<SceneVideoResult> => {
   const ai = getAIClient();
   // Only the initial operation submission is wrapped in retry — the polling
   // loop below has its own exponential backoff for transient 5xx during polls.
@@ -574,6 +581,35 @@ export const generateSceneVideo = async (imageBase64: string, prompt: string, as
   const blob = await (await fetch(`/api/download?uri=${encodeURIComponent(videoUri)}`)).blob();
   const videoUrl = await blobToBase64(blob);
   return { videoUrl, videoUri };
+};
+
+// Phase 15 G12 — exposed for App.tsx to render an info-toast/log entry when
+// the auto-rewrite successfully recovers a scene. Returns the original prompt
+// on failure so the wrapper can re-throw the original policy error cleanly.
+export const rewriteVisualPromptForPolicy = async (originalPrompt: string): Promise<string> => {
+  const ai = getAIClient();
+  const res = await ai.models.generateContent({
+    model: MODEL_NAMES.CHECK,
+    contents: buildRewriteInstruction(originalPrompt),
+  });
+  const rewritten = (res.text || '').trim();
+  if (!rewritten) throw new Error('Policy rewrite returned empty text.');
+  if (rewritten === originalPrompt) throw new Error('Policy rewrite returned the original prompt unchanged.');
+  return rewritten;
+};
+
+export const generateSceneVideo = async (imageBase64: string, prompt: string, aspectRatio: AspectRatio, resolution: Resolution, style: string = "Cinematic"): Promise<SceneVideoResult> => {
+  // G12: auto-retry once with a rewritten prompt if Veo rejects the original
+  // for content policy. The withPolicyRetry helper is in services/veoPolicyRetry.ts
+  // so we can unit-test the orchestration without mocking the full Veo + fetch chain.
+  return withPolicyRetry(
+    prompt,
+    (p) => _runVeoOnce(imageBase64, p, aspectRatio, resolution, style),
+    (p) => rewriteVisualPromptForPolicy(p),
+    (rewritten) => {
+      console.info(`Veo content-policy retry: rewrote prompt → "${rewritten.slice(0, 120)}${rewritten.length > 120 ? '…' : ''}"`);
+    },
+  );
 };
 
 // Extends a previously generated Veo video. The input MUST be the remote URI
