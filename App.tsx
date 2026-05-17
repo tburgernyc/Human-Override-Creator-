@@ -382,10 +382,18 @@ const App: React.FC = () => {
       if (e.key === 'Escape') {
         // B4: prefer LIFO close — pop the topmost stack modal first so a
         // user inside a nested view backs out one layer at a time. If
-        // nothing's on the stack, fall through to clearing payload modals
-        // and the asset workspace (none of which participate in the stack).
+        // nothing's on the stack, fall through to the payload modals
+        // (cost-confirm, delete-confirm) and finally the asset workspace.
         if (modals.hasAny()) {
           modals.closeTop();
+          return;
+        }
+        if (batchConfirm) {
+          setBatchConfirm(null);
+          return;
+        }
+        if (pendingDeleteSceneId) {
+          setPendingDeleteSceneId(null);
           return;
         }
         setAssetWorkspaceTab(null);
@@ -415,7 +423,18 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [project.scenes]);
+  }, [project.scenes, modals, batchConfirm, pendingDeleteSceneId, assetWorkspaceTab, inspectingScene, editingCharacter]);
+
+  // If the scene targeted by the delete-confirm modal disappears (e.g. an
+  // undo from another flow), clear the pending id instead of leaving a
+  // dangling modal. This used to live as a setState inside the IIFE that
+  // renders the modal — moved to an effect so React doesn't see a state
+  // update during render.
+  useEffect(() => {
+    if (pendingDeleteSceneId && !project.scenes.some(s => s.id === pendingDeleteSceneId)) {
+      setPendingDeleteSceneId(null);
+    }
+  }, [pendingDeleteSceneId, project.scenes]);
 
   // Bumped from 50 → 500 entries (R5). The log is now persisted to IDB so it
   // survives refreshes; capping at 500 keeps memory bounded for very long
@@ -640,6 +659,13 @@ const App: React.FC = () => {
         }
       }
 
+      // A scene is only `'complete'` when all three asset URLs are present.
+      // Per-phase regenerates may run image-only or video-only on a fresh
+      // scene, in which case the remaining slots are still empty and the
+      // status should fall back to `'pending'` until they're filled.
+      const completeOrPending = (image?: string, video?: string, audio?: string): GeneratedAssets[string]['status'] =>
+        (image && video && audio) ? 'complete' : 'pending';
+
       // Phase 1: Image (or reuse existing)
       let img: string | undefined = existingAsset?.imageUrl;
       if (phases.image) {
@@ -647,7 +673,11 @@ const App: React.FC = () => {
         const keyArtImg = project.keyArtSceneId ? project.assets[project.keyArtSceneId]?.imageUrl : undefined;
         const styleRef = moodboardImg || keyArtImg;
         img = await generateSceneImage(scene, workingCharacters, aspectRatio, resolution, feedback, project.globalStyle, project.productionSeed, styleRef);
-        const nextStatus = phases.video ? 'generating_video' : (phases.audio ? 'generating_audio' : 'complete');
+        const nextStatus = phases.video
+          ? 'generating_video'
+          : phases.audio
+            ? 'generating_audio'
+            : completeOrPending(img, existingAsset?.videoUrl, existingAsset?.audioUrl);
         setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], imageUrl: img, status: nextStatus } } }));
       }
 
@@ -659,7 +689,9 @@ const App: React.FC = () => {
         const result = await generateSceneVideo(img, scene.visualPrompt, aspectRatio, resolution, project.globalStyle);
         videoUrl = result.videoUrl;
         videoUri = result.videoUri;
-        const nextStatus = phases.audio ? 'generating_audio' : 'complete';
+        const nextStatus = phases.audio
+          ? 'generating_audio'
+          : completeOrPending(img, videoUrl, existingAsset?.audioUrl);
         setProject(prev => ({ ...prev, assets: { ...prev.assets, [sceneId]: { ...prev.assets[sceneId], videoUrl, videoUri, status: nextStatus } } }));
       }
 
@@ -696,7 +728,7 @@ const App: React.FC = () => {
               videoUri,
               audioUrl: audio,
               narrationHash,
-              status: 'complete',
+              status: completeOrPending(img, videoUrl, audio),
               variants: finalVariant
                 ? [finalVariant, ...(currentAsset?.variants || [])].slice(0, 5)
                 : (currentAsset?.variants || [])
@@ -1080,7 +1112,13 @@ const App: React.FC = () => {
             reader.onload = (ev) => {
               try {
                 const data = JSON.parse(ev.target!.result as string);
-                setProject(migrateProject(data));
+                // migrateProject hard-codes `assets: {}` because localStorage
+                // can't hold base64 blobs — but a user-supplied JSON file is
+                // the one path where we DO want to round-trip generated
+                // assets. Overlay them back after migration.
+                const migrated = migrateProject(data);
+                const importedAssets = data && typeof data.assets === 'object' && data.assets ? data.assets : {};
+                setProject({ ...migrated, assets: importedAssets });
                 setView('dashboard');
               } catch {
                 addLog('Project import failed: invalid JSON.', 'error');
@@ -1276,7 +1314,7 @@ const App: React.FC = () => {
                       <p className="text-[10px] text-mystic-gray uppercase font-bold tracking-[0.3em] mt-2">Manifesting visual and auditory temporal takes</p>
                     </div>
                     <div className="flex gap-4">
-                      <button onClick={handleManifestAll} disabled={isBatchProcessing} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
+                      <button onClick={openBatchConfirm} disabled={isBatchProcessing} className="px-10 py-4 nm-button-gold text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-nm-gold hover:scale-105 active:scale-95 transition-all flex items-center gap-4">
                         <i className="fa-solid fa-bolt-lightning animate-pulse"></i> Initialize Batch Manifest
                       </button>
                       <button onClick={() => modals.open('mixer')} className="w-14 h-14 nm-button rounded-2xl flex items-center justify-center text-solar-amber border border-white/5 hover:text-white transition-all shadow-xl">
@@ -1428,11 +1466,9 @@ const App: React.FC = () => {
       )}
       {pendingDeleteSceneId && (() => {
         const idx = project.scenes.findIndex(s => s.id === pendingDeleteSceneId);
-        if (idx < 0) {
-          // Scene vanished from under us — clear the pending state.
-          setPendingDeleteSceneId(null);
-          return null;
-        }
+        // Scene-vanished cleanup lives in a useEffect above; just bail
+        // visually here so this render pass doesn't show stale chrome.
+        if (idx < 0) return null;
         const asset = project.assets[pendingDeleteSceneId];
         const hasAssets = !!(asset?.imageUrl || asset?.videoUrl || asset?.audioUrl);
         const idToDelete = pendingDeleteSceneId;

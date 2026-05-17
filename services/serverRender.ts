@@ -106,9 +106,13 @@ export const buildRenderManifest = (
         scenes: sceneEntries,
         mastering: {
             lutPreset: mst?.lutPreset,
-            musicVolume: clamp01(mst?.musicVolume ?? 0.5),
-            voiceVolume: clamp01(mst?.voiceVolume ?? 1.0),
-            ambientVolume: clamp01(mst?.ambientVolume ?? 0.3),
+            // Client AudioMixer sliders use 0-150 (100 = unity gain), matching
+            // the defaults in makeDefaultProject. Normalize to 0-1.5 here so
+            // ffmpeg's `volume=` filter gets a multiplier in its expected
+            // range and the boost half of the slider isn't silently clamped.
+            musicVolume: clampVolume(mst?.musicVolume ?? 15),
+            voiceVolume: clampVolume(mst?.voiceVolume ?? 100),
+            ambientVolume: clampVolume(mst?.ambientVolume ?? 30),
             filmGrain: clamp01((mst?.filmGrain ?? 0) / 100),       // mastering uses 0-100 in client; normalize
             vignetteIntensity: clamp01((mst?.vignetteIntensity ?? 0) / 100),
         },
@@ -116,6 +120,12 @@ export const buildRenderManifest = (
 };
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
+
+// AudioMixer sliders are 0-150 with 100 representing unity gain. Divide by
+// 100 then clamp to [0, 1.5] so the server-side filter graph (ffmpeg
+// `volume=N`) gets a multiplier where 1.0 is no change and 1.5 is the
+// maximum boost the UI exposes.
+const clampVolume = (n: number): number => Math.max(0, Math.min(1.5, n / 100));
 
 // Fires the POST. Returns the server's JSON response (currently a 501 echo
 // in slice 6a; will return a streaming MP4 / SSE channel in slices 6b–6e).

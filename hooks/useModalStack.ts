@@ -1,4 +1,4 @@
-import { useCallback, useReducer } from 'react';
+import { useCallback, useMemo, useReducer } from 'react';
 
 // B4 (audit slice): single source of truth for the boolean-only modals in
 // App.tsx. Replaces ~9 individual `useState<boolean>` toggles with a stack
@@ -57,7 +57,7 @@ export const computeZIndex = (stack: ModalStackState, id: ModalId, base = 100): 
 };
 
 export interface ModalStackApi {
-    readonly stack: Stack;
+    readonly stack: ModalStackState;
     /** True when `id` is currently mounted. */
     isOpen: (id: ModalId) => boolean;
     /** True when at least one modal is mounted. */
@@ -88,5 +88,11 @@ export const useModalStack = (): ModalStackApi => {
     const closeAll = useCallback(() => dispatch({ type: 'closeAll' }), []);
     const zIndex = useCallback((id: ModalId, base = 100) => computeZIndex(stack, id, base), [stack]);
 
-    return { stack, isOpen, hasAny, open, close, closeTop, closeAll, zIndex };
+    // Memoized so consumers can safely include the api in useEffect dep arrays
+    // (e.g. the Escape keydown handler in App.tsx) without re-binding listeners
+    // every render.
+    return useMemo(
+        () => ({ stack, isOpen, hasAny, open, close, closeTop, closeAll, zIndex }),
+        [stack, isOpen, hasAny, open, close, closeTop, closeAll, zIndex],
+    );
 };

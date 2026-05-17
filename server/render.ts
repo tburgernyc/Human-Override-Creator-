@@ -92,9 +92,13 @@ export const validateManifest = (raw: unknown): { ok: true; manifest: ServerRend
 
     const mst = m.mastering as Record<string, unknown> | undefined;
     if (!mst || typeof mst !== 'object') return { ok: false, error: 'mastering is required' };
+    // filmGrain and vignetteIntensity are 0-1 (normalized in serverRender.ts).
+    // Volumes are 0-1.5 (client 0-150 slider divided by 100 — 1.0 unity, 1.5 max boost).
+    const VOLUME_KEYS = new Set<string>(['musicVolume', 'voiceVolume', 'ambientVolume']);
     for (const k of ['musicVolume', 'voiceVolume', 'ambientVolume', 'filmGrain', 'vignetteIntensity'] as const) {
         const v = mst[k];
-        if (typeof v !== 'number' || !(v >= 0 && v <= 1)) return { ok: false, error: `mastering.${k} must be a number in [0, 1]` };
+        const max = VOLUME_KEYS.has(k) ? 1.5 : 1;
+        if (typeof v !== 'number' || !(v >= 0 && v <= max)) return { ok: false, error: `mastering.${k} must be a number in [0, ${max}]` };
     }
     if (mst.lutPreset !== undefined && typeof mst.lutPreset !== 'string') return { ok: false, error: 'mastering.lutPreset must be a string when present' };
 
@@ -114,6 +118,34 @@ const runFfmpeg = (ffmpegPath: string, args: string[]): Promise<string> => new P
     proc.on('exit', code => {
         if (code === 0) resolve(stderr);
         else reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(-500)}`));
+    });
+});
+
+// Parse the `Duration: HH:MM:SS.cc` line out of an ffmpeg `-i` probe. Exported
+// for tests so the regex / time-math stays unit-checkable without spawning
+// ffmpeg. Returns NaN when no Duration line is present.
+export const parseFfmpegDurationSec = (stderr: string): number => {
+    const m = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
+    if (!m) return NaN;
+    const [, h, mm, ss] = m;
+    return Number(h) * 3600 + Number(mm) * 60 + Number(ss);
+};
+
+// Probe the actual duration of a media file using ffmpeg's `-i` mode. ffmpeg
+// exits with code 1 because no output was requested, but the metadata is
+// printed to stderr first — so we ignore the exit code and parse stderr
+// directly. Used by handleRender to align audio offsets with actual Veo
+// clip lengths (clips routinely differ from the manifest's estimatedDuration
+// by a few hundred ms, which cumulatively drifts TTS out of sync).
+const probeDurationSec = (ffmpegPath: string, file: string): Promise<number> => new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath, ['-hide_banner', '-i', file]);
+    let stderr = '';
+    proc.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    proc.on('error', reject);
+    proc.on('exit', () => {
+        const sec = parseFfmpegDurationSec(stderr);
+        if (Number.isFinite(sec) && sec > 0) resolve(sec);
+        else reject(new Error(`Could not parse duration from ffmpeg output for ${path.basename(file)}`));
     });
 });
 
@@ -289,7 +321,7 @@ export const handleRender = async (req: Request, res: Response): Promise<void> =
     }
 
     const v = validateManifest(req.body);
-    if (!v.ok) {
+    if (v.ok === false) {
         res.status(400).json({ error: 'Invalid render manifest', message: v.error });
         return;
     }
@@ -318,13 +350,25 @@ export const handleRender = async (req: Request, res: Response): Promise<void> =
             // Decode the TTS blob to a tmp file if present so ffmpeg can
             // ingest it as an input. The TTS audio is anchored to this
             // scene's start, computed as the cumulative duration of all
-            // prior scenes' estimatedDuration values.
+            // prior scenes' ACTUAL rendered durations — probing each clip
+            // because Veo's output routinely differs from manifest
+            // estimates by a few hundred ms, which cumulatively pushes
+            // TTS off the visual beat by the end of a long render.
             if (scene.audioBase64) {
                 const audioPath = path.join(tmpDir, `tts_${String(i).padStart(4, '0')}.wav`);
                 await writeFile(audioPath, Buffer.from(stripBase64Prefix(scene.audioBase64), 'base64'));
                 audioInputs.push({ path: audioPath, offsetMs: cumulativeMs });
             }
-            cumulativeMs += Math.round(scene.estimatedDuration * 1000);
+            let actualSec: number;
+            try {
+                actualSec = await probeDurationSec(ffmpegStatic, dest);
+            } catch {
+                // If probing fails for any reason, fall back to the manifest
+                // estimate so the render still produces output. Drift is
+                // preferable to a hard failure.
+                actualSec = scene.estimatedDuration;
+            }
+            cumulativeMs += Math.round(actualSec * 1000);
         }
 
         const outputPath = path.join(tmpDir, 'out.mp4');

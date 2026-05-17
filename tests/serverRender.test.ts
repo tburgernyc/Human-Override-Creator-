@@ -54,9 +54,10 @@ const makeProject = (sceneIds: string[], opts: { withVideoUri?: boolean } = { wi
     currentStepMessage: '',
     productionSeed: 42,
     mastering: {
-        musicVolume: 0.5,
-        voiceVolume: 1,
-        ambientVolume: 0.3,
+        // AudioMixer sliders are client-scale 0-150 (100 = unity gain).
+        musicVolume: 50,
+        voiceVolume: 100,
+        ambientVolume: 30,
         filmGrain: 50, // client-scale 0-100
         bloomIntensity: 0,
         vignetteIntensity: 75,
@@ -84,13 +85,14 @@ describe('buildRenderManifest', () => {
         expect(manifest.scenes[0].transitionToNext).toBe('fade');
     });
 
-    it('normalizes mastering 0-100 ranges to server 0-1', () => {
+    it('normalizes mastering client ranges to server', () => {
         const project = makeProject(['s1']);
         const manifest = buildRenderManifest(project, AspectRatio.LANDSCAPE, Resolution.FHD);
 
-        expect(manifest.mastering.filmGrain).toBeCloseTo(0.5, 5);          // 50/100
-        expect(manifest.mastering.vignetteIntensity).toBeCloseTo(0.75, 5); // 75/100
-        expect(manifest.mastering.musicVolume).toBe(0.5);                  // already in 0-1
+        expect(manifest.mastering.filmGrain).toBeCloseTo(0.5, 5);           // 50/100  → [0, 1]
+        expect(manifest.mastering.vignetteIntensity).toBeCloseTo(0.75, 5);  // 75/100  → [0, 1]
+        expect(manifest.mastering.musicVolume).toBeCloseTo(0.5, 5);         // 50/100  → [0, 1.5]
+        expect(manifest.mastering.voiceVolume).toBeCloseTo(1.0, 5);         // 100/100 → unity gain
     });
 
     it('maps client AspectRatio enum to server string', () => {
@@ -132,14 +134,14 @@ describe('validateManifest (server)', () => {
         const m = { ...baseManifest(), schemaVersion: 99 };
         const v = validateManifest(m);
         expect(v.ok).toBe(false);
-        if (!v.ok) expect(v.error).toMatch(/schemaVersion/);
+        if (v.ok === false) expect(v.error).toMatch(/schemaVersion/);
     });
 
     it('rejects empty scenes array', () => {
         const m = { ...baseManifest(), scenes: [] };
         const v = validateManifest(m);
         expect(v.ok).toBe(false);
-        if (!v.ok) expect(v.error).toMatch(/scenes/);
+        if (v.ok === false) expect(v.error).toMatch(/scenes/);
     });
 
     it('rejects a scene with non-positive duration', () => {
@@ -147,22 +149,22 @@ describe('validateManifest (server)', () => {
         m.scenes[0].estimatedDuration = 0;
         const v = validateManifest(m);
         expect(v.ok).toBe(false);
-        if (!v.ok) expect(v.error).toMatch(/estimatedDuration/);
+        if (v.ok === false) expect(v.error).toMatch(/estimatedDuration/);
     });
 
-    it('rejects mastering volume outside [0, 1]', () => {
+    it('rejects mastering volume outside [0, 1.5]', () => {
         const m = baseManifest();
-        m.mastering.musicVolume = 1.5;
+        m.mastering.musicVolume = 2;
         const v = validateManifest(m);
         expect(v.ok).toBe(false);
-        if (!v.ok) expect(v.error).toMatch(/musicVolume/);
+        if (v.ok === false) expect(v.error).toMatch(/musicVolume/);
     });
 
     it('rejects an unknown aspect ratio string', () => {
         const m = { ...baseManifest(), aspectRatio: '21:9' as any };
         const v = validateManifest(m);
         expect(v.ok).toBe(false);
-        if (!v.ok) expect(v.error).toMatch(/aspectRatio/);
+        if (v.ok === false) expect(v.error).toMatch(/aspectRatio/);
     });
 
     it('rejects an unknown transitionToNext value', () => {
@@ -170,7 +172,7 @@ describe('validateManifest (server)', () => {
         (m.scenes[0] as any).transitionToNext = 'glitch';
         const v = validateManifest(m);
         expect(v.ok).toBe(false);
-        if (!v.ok) expect(v.error).toMatch(/transitionToNext/);
+        if (v.ok === false) expect(v.error).toMatch(/transitionToNext/);
     });
 });
 
