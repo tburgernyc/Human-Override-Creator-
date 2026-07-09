@@ -23,7 +23,7 @@ export const ProductionTimeline: React.FC<ProductionTimelineProps> = ({
     let currentX = 0;
     
     scenes.forEach((scene) => {
-      const width = (scene.estimatedDuration / totalDuration) * 1000;
+      const width = totalDuration > 0 ? (scene.estimatedDuration / totalDuration) * 1000 : 0;
       const intensity = scene.musicMood === 'action' ? 10 : scene.musicMood === 'suspense' ? 25 : 45;
       const midX = currentX + width / 2;
       path += ` Q ${midX} ${intensity}, ${currentX + width} 40`;
@@ -81,7 +81,7 @@ export const ProductionTimeline: React.FC<ProductionTimelineProps> = ({
           const isComplete = asset?.status === 'complete';
           const isProcessing = asset?.status?.startsWith('generating');
           const isActive = currentSceneId === scene.id;
-          const widthPercent = (scene.estimatedDuration / totalDuration) * 100;
+          const widthPercent = totalDuration > 0 ? (scene.estimatedDuration / totalDuration) * 100 : 0;
 
           return (
             <div 

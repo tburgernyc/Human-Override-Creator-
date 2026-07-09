@@ -27,7 +27,7 @@ import { VFXMaster } from './components/VFXMaster';
 import { Moodboard } from './components/Moodboard';
 import { ProductionStageOverview } from './components/ProductionStageOverview';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft } from './types';
+import { ProjectState, GeneratedAssets, AspectRatio, Resolution, Character, Scene, ChatMessage, ProductionTask, ProjectModules, LogEntry, AssetHistoryItem, ViralPotential, DirectorDraft, ProductionPhase } from './types';
 import {
   analyzeScript,
   generateCharacterImage,
@@ -61,7 +61,7 @@ import {
   InterventionAction
 } from './services/interventionEngine';
 import { QualityGateModal, ActiveInterventions } from './components/WorkflowComponents';
-import { VOICE_PRESETS, VISUAL_STYLES } from './constants';
+import { VOICE_PRESETS, VISUAL_STYLES, INITIAL_SCRIPT_PLACEHOLDER } from './constants';
 
 const LOCAL_STORAGE_KEY = 'human_override_active_project_v8';
 const LEGACY_STORAGE_KEY = 'human_override_active_project_v7';
@@ -76,11 +76,9 @@ interface BatchQueue {
   timestamp: number;
 }
 
-type ProductionPhase = 'genesis' | 'manifest' | 'synthesis' | 'post';
-
 const App: React.FC = () => {
   const DEFAULT_PROJECT: ProjectState = {
-    script: '', status: 'idle', characters: [], scenes: [], assets: {}, tasks: [], modules: {}, productionLog: [],
+    script: INITIAL_SCRIPT_PLACEHOLDER, status: 'idle', characters: [], scenes: [], assets: {}, tasks: [], modules: {}, productionLog: [],
     currentStepMessage: '', globalStyle: VISUAL_STYLES[0], productionSeed: Math.floor(Math.random() * 1000000),
     activeDraft: null,
     mastering: {
@@ -1193,7 +1191,12 @@ const App: React.FC = () => {
             {/* STAGE 1: GENESIS (Script & Reference) */}
             <div id="genesis-section" className={`grid grid-cols-1 xl:grid-cols-12 gap-10 transition-all duration-700 ${activePhase !== 'genesis' ? 'opacity-50 hover:opacity-100 blur-[1px] hover:blur-0' : ''}`}>
               <div className="xl:col-span-8">
-                <ScriptInput onAnalyze={handleAnalyze} isAnalyzing={project.status === 'analyzing'} />
+                <ScriptInput
+                  script={project.script || ''}
+                  onScriptChange={(s) => setProject(p => ({ ...p, script: s }))}
+                  onAnalyze={handleAnalyze}
+                  isAnalyzing={project.status === 'analyzing'}
+                />
               </div>
               <div className="xl:col-span-4 flex flex-col gap-6">
                 <Moodboard

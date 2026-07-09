@@ -24,12 +24,10 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClo
 
     const handlePreview = async () => {
         setIsPreviewing(true);
+        let ctx: AudioContext | null = null;
         try {
             const data = await previewVoice(voiceId, { speed, pitch });
-            const audio = new Audio(`data:audio/pcm;base64,${data}`);
-            // Note: Since it's raw PCM we might need the decoder, but for preview simple DataURI works if Gemini wraps it
-            // For robust preview we'd use the decodeAudio helper
-            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+            ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
             const binary = atob(data);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -40,9 +38,11 @@ export const CharacterModal: React.FC<CharacterModalProps> = ({ character, onClo
             const source = ctx.createBufferSource();
             source.buffer = buffer;
             source.connect(ctx.destination);
+            source.onended = () => { ctx?.close(); };
             source.start(0);
         } catch (e) {
             console.error(e);
+            ctx?.close();
         } finally {
             setIsPreviewing(false);
         }

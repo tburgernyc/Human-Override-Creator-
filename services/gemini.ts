@@ -6,7 +6,9 @@ import { Character, Scene, DialogueLine, AspectRatio, Resolution, ProjectState, 
 import { getCachedAsset, cacheAsset } from "./assetCache";
 
 // Proxy URL for secure server-side API calls
-const PROXY_URL = 'http://localhost:3001';
+const PROXY_URL = (typeof window !== 'undefined' && window.location.hostname !== 'localhost')
+  ? `${window.location.origin}/api`
+  : 'http://localhost:3001';
 
 const cleanJsonResponse = (text: string): string => {
   let clean = text.trim();
@@ -535,9 +537,12 @@ export const analyzeViralPotential = async (script: string, seed?: number): Prom
       required: ["hookScore", "retentionCatalysts", "engagementFriction", "heatmap", "predictionSummary"]
     };
 
-    const prompt = `Perform a viral psychology analysis on this video script for a YouTube audience. 
-      Assess hook strength, pacing, and emotional peaks. 
-      Provide a 5-point heatmap (values 0-1) representing relative engagement. Output JSON.`;
+    const prompt = `Perform a viral psychology analysis on this video script for a YouTube audience.
+      Assess hook strength, pacing, and emotional peaks.
+      Provide a 5-point heatmap (values 0-1) representing relative engagement. Output JSON.
+
+Script:
+${script.substring(0, 3000)}`;
 
     const response = await withTimeout(ai.models.generateContent({
       model: MODEL_NAMES.THINKING,
@@ -910,7 +915,7 @@ export const extendSceneVideo = async (prevVideoUri: string, prompt: string, asp
     const ai = await getAIClient();
     // Only 720p videos can be extended currently according to guidelines
     let operation: any = await withTimeout(ai.models.generateVideos({
-      model: 'veo-3.1-generate-preview',
+      model: MODEL_NAMES.VIDEO,
       prompt: `Continue the scene: ${prompt}`,
       video: { uri: prevVideoUri },
       config: {

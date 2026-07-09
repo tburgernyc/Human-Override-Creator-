@@ -14,7 +14,7 @@ export const ProductionMonitor: React.FC<ProductionMonitorProps> = ({ isActive, 
 
   const totalScenes = scenes.length;
   const completedScenes = Object.values(assets).filter(a => a.status === 'complete').length;
-  const progress = (completedScenes / totalScenes) * 100;
+  const progress = totalScenes > 0 ? (completedScenes / totalScenes) * 100 : 0;
 
   return (
     <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[200] w-full max-w-2xl animate-in slide-in-from-bottom-10 duration-500">

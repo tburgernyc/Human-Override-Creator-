@@ -39,25 +39,26 @@ const TEXT_ANIMATIONS = [
 export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, characters, assetImage, onUpdate, onClose }) => {
     const [activeTab, setActiveTab] = useState<'optics' | 'narrative' | 'audio' | 'grading' | 'motion_gfx'>('optics');
     const [isOptimizing, setIsOptimizing] = useState(false);
+    const [draft, setDraft] = useState<Scene>(() => ({ ...scene }));
 
     const updateField = (field: keyof Scene | string, value: any) => {
-        onUpdate({ ...scene, [field]: value });
+        setDraft(prev => ({ ...prev, [field]: value }));
     };
 
     const updateGrade = (field: keyof ColorGrade, value: number) => {
-        const currentGrade = scene.colorGrading || { contrast: 100, saturation: 100, brightness: 100, temperature: 0, tint: 0, exposure: 0, vibrance: 100 };
+        const currentGrade = draft.colorGrading || { contrast: 100, saturation: 100, brightness: 100, temperature: 0, tint: 0, exposure: 0, vibrance: 100 };
         updateField('colorGrading', { ...currentGrade, [field]: value });
     };
 
     const updateOverlay = (field: keyof TextOverlay, value: any) => {
-        const currentOverlay = scene.textOverlay || { text: '', position: 'bottom', style: 'subtitle' };
+        const currentOverlay = draft.textOverlay || { text: '', position: 'bottom', style: 'subtitle' };
         updateField('textOverlay', { ...currentOverlay, [field]: value });
     };
 
     const handleAIPolish = async () => {
         setIsOptimizing(true);
         try {
-            const context = scene.narratorLines[0]?.text || scene.description;
+            const context = draft.narratorLines[0]?.text || draft.description;
             const polished = await optimizeVisualPrompt(context, "High-End Cinematic");
             updateField('visualPrompt', polished);
         } catch (e) {
@@ -67,7 +68,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
         }
     };
 
-    const grade = scene.colorGrading || { contrast: 100, saturation: 100, brightness: 100, temperature: 0, tint: 0, exposure: 0, vibrance: 100 };
+    const grade = draft.colorGrading || { contrast: 100, saturation: 100, brightness: 100, temperature: 0, tint: 0, exposure: 0, vibrance: 100 };
     const filterStyle = {
         filter: [
             `contrast(${grade.contrast}%)`,
@@ -132,7 +133,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                         </button>
                                     </div>
                                     <textarea
-                                        value={scene.visualPrompt}
+                                        value={draft.visualPrompt}
                                         onChange={e => updateField('visualPrompt', e.target.value)}
                                         className="w-full nm-inset-input rounded-2xl p-6 text-sm text-celestial-stone focus:text-white outline-none focus:border-luna-gold/50 transition-all font-mono leading-relaxed"
                                         rows={4}
@@ -146,7 +147,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                             <div>
                                                 <label className="text-[10px] text-celestial-stone uppercase font-bold block mb-2">Camera Motion Profile</label>
                                                 <select
-                                                    value={scene.cameraMotion}
+                                                    value={draft.cameraMotion}
                                                     onChange={e => updateField('cameraMotion', e.target.value)}
                                                     className="w-full nm-inset-input border-none rounded-xl p-3 text-xs text-white outline-none focus:ring-1 focus:ring-luna-gold/30"
                                                 >
@@ -161,7 +162,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                             <div>
                                                 <label className="text-[10px] text-celestial-stone uppercase font-bold block mb-2">Transition Matrix</label>
                                                 <select
-                                                    value={scene.transition}
+                                                    value={draft.transition}
                                                     onChange={e => updateField('transition', e.target.value)}
                                                     className="w-full nm-inset-input border-none rounded-xl p-3 text-xs text-white outline-none focus:ring-1 focus:ring-luna-gold/30"
                                                 >
@@ -188,7 +189,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                             <button
                                                 key={sfx.value}
                                                 onClick={() => updateField('ambientSfx', sfx.value)}
-                                                className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${scene.ambientSfx === sfx.value ? 'bg-luna-gold text-white border-luna-gold' : 'nm-button border-white/5 text-celestial-stone'}`}
+                                                className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${draft.ambientSfx === sfx.value ? 'bg-luna-gold text-white border-luna-gold' : 'nm-button border-white/5 text-celestial-stone'}`}
                                             >
                                                 <i className={`fa-solid ${sfx.icon} text-sm`}></i>
                                                 <span className="text-[10px] font-bold uppercase tracking-widest">{sfx.label}</span>
@@ -200,7 +201,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                 <section>
                                     <h3 className="text-xs font-black text-luna-gold uppercase tracking-[0.2em] mb-8">Vocal Staging & Emotional Range</h3>
                                     <div className="space-y-8">
-                                        {scene.narratorLines.map((line, idx) => (
+                                        {draft.narratorLines.map((line, idx) => (
                                             <div key={idx} className="nm-panel p-6 rounded-3xl border border-white/5 space-y-6">
                                                 <div className="flex justify-between items-center">
                                                     <div className="flex items-center gap-4">
@@ -214,7 +215,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                                             <button
                                                                 key={emotion.value}
                                                                 onClick={() => {
-                                                                    const nextLines = [...scene.narratorLines];
+                                                                    const nextLines = [...draft.narratorLines];
                                                                     nextLines[idx] = { ...line, emotion: emotion.value as any };
                                                                     updateField('narratorLines', nextLines);
                                                                 }}
@@ -229,7 +230,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                                 <textarea
                                                     value={line.text}
                                                     onChange={e => {
-                                                        const nextLines = [...scene.narratorLines];
+                                                        const nextLines = [...draft.narratorLines];
                                                         nextLines[idx] = { ...line, text: e.target.value };
                                                         updateField('narratorLines', nextLines);
                                                     }}
@@ -252,7 +253,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                             <label className="text-[10px] text-celestial-stone uppercase font-bold block mb-3 tracking-widest">Overlay Content</label>
                                             <input
                                                 type="text"
-                                                value={scene.textOverlay?.text || ""}
+                                                value={draft.textOverlay?.text || ""}
                                                 onChange={e => updateOverlay('text', e.target.value)}
                                                 placeholder="Enter display text..."
                                                 className="w-full nm-inset-input border-none rounded-xl p-4 text-sm text-white font-medium outline-none"
@@ -265,7 +266,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                                     <button
                                                         key={anim.value}
                                                         onClick={() => updateOverlay('animation', anim.value)}
-                                                        className={`p-3 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all ${scene.textOverlay?.animation === anim.value ? 'bg-luna-gold text-white border-luna-gold' : 'nm-button border-white/5 text-celestial-stone'}`}
+                                                        className={`p-3 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all ${draft.textOverlay?.animation === anim.value ? 'bg-luna-gold text-white border-luna-gold' : 'nm-button border-white/5 text-celestial-stone'}`}
                                                     >
                                                         {anim.label}
                                                     </button>
@@ -279,7 +280,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                                     <button
                                                         key={pos}
                                                         onClick={() => updateOverlay('position', pos as any)}
-                                                        className={`flex-1 py-2 rounded-lg text-[9px] font-bold uppercase transition-all ${scene.textOverlay?.position === pos ? 'bg-white/10 text-white shadow-inner' : 'text-mystic-gray hover:text-white'}`}
+                                                        className={`flex-1 py-2 rounded-lg text-[9px] font-bold uppercase transition-all ${draft.textOverlay?.position === pos ? 'bg-white/10 text-white shadow-inner' : 'text-mystic-gray hover:text-white'}`}
                                                     >
                                                         {pos}
                                                     </button>
@@ -316,13 +317,13 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                             <div key={slider.field} className="space-y-3">
                                                 <div className="flex justify-between items-center">
                                                     <label className="text-[10px] text-celestial-stone uppercase font-bold tracking-widest">{slider.label}</label>
-                                                    <span className="text-[11px] font-mono text-luna-gold font-bold">{(scene.colorGrading as any)?.[slider.field] ?? (slider.field === 'temperature' || slider.field === 'tint' || slider.field === 'exposure' ? 0 : 100)}{slider.unit}</span>
+                                                    <span className="text-[11px] font-mono text-luna-gold font-bold">{(draft.colorGrading as any)?.[slider.field] ?? (slider.field === 'temperature' || slider.field === 'tint' || slider.field === 'exposure' ? 0 : 100)}{slider.unit}</span>
                                                 </div>
                                                 <input
                                                     type="range"
                                                     min={slider.min}
                                                     max={slider.max}
-                                                    value={(scene.colorGrading as any)?.[slider.field] ?? (slider.field === 'temperature' || slider.field === 'tint' || slider.field === 'exposure' ? 0 : 100)}
+                                                    value={(draft.colorGrading as any)?.[slider.field] ?? (slider.field === 'temperature' || slider.field === 'tint' || slider.field === 'exposure' ? 0 : 100)}
                                                     onChange={e => updateGrade(slider.field as any, parseInt(e.target.value))}
                                                     className="w-full accent-luna-gold"
                                                 />
@@ -359,7 +360,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
                                     <h3 className="text-xs font-black text-luna-gold uppercase tracking-[0.2em] mb-6">Scene Context Registry</h3>
                                     <input
                                         type="text"
-                                        value={scene.description}
+                                        value={draft.description}
                                         onChange={e => updateField('description', e.target.value)}
                                         className="w-full nm-inset-input border-none rounded-xl p-4 text-sm text-white font-medium outline-none"
                                     />
@@ -371,7 +372,7 @@ export const SceneInspector: React.FC<SceneInspectorProps> = ({ scene, character
 
                 <div className="p-8 border-t border-white/5 bg-white/5 flex justify-end gap-4">
                     <button onClick={onClose} className="px-8 py-3 text-[10px] font-bold text-celestial-stone uppercase tracking-widest hover:text-white transition-colors">Discard</button>
-                    <button onClick={onClose} className="px-10 py-3 bg-gold-gradient text-white rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-xl shadow-luna-gold/20 transition-all hover:scale-105 active:scale-95">Commit Scene Parameters</button>
+                    <button onClick={() => { onUpdate(draft); onClose(); }} className="px-10 py-3 bg-gold-gradient text-white rounded-xl text-[10px] font-bold uppercase tracking-widest shadow-xl shadow-luna-gold/20 transition-all hover:scale-105 active:scale-95">Commit Scene Parameters</button>
                 </div>
             </div>
         </div>

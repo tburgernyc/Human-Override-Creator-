@@ -315,7 +315,7 @@ export const Renderer: React.FC<RendererProps> = ({ scenes, assets, resolution, 
 
         startRendering();
         return () => { isCancelled = true; if (audioCtx) audioCtx.close(); };
-    }, [scenes, assets, cinematicProfile]);
+    }, [scenes, assets, cinematicProfile, resolution, aspectRatio, mastering, globalStyle]);
 
     return (
         <div className="fixed inset-0 bg-eclipse-black/98 flex flex-col items-center justify-center z-[500] backdrop-blur-3xl p-6">
